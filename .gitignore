@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local secrets and machine-specific config
+config/local.env
+*.local.env
+.env
+!.env.example
+
+# Runtime outputs
+runtime/*
+!runtime/.gitkeep
+logs/
+logs.zip
+*.log
+*.wav
+*.mp3
+
+# Local chat memory
+xjtlu-rag-system/chat_memory.db
+xjtlu-rag-system/__pycache__/
+
+# Bundled/generated heavyweight dependencies
+deps/ollama/
+deps/ollama-home/
+deps/Qwen3.5-0.8B/
+deps/unitree_g1_action_classifier_package/.venv/
+deps/unitree_g1_action_classifier_package/unitree_sdk2/build/
+unitree_sdk2_cyclonedds_bundle_*.tar.gz
+
+# Downloaded model artifacts. Keep lightweight token/keyword config files.
+*.safetensors
+*.onnx
+*.gguf

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XIPU Compass</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="chat">
+        <header>
+          <div class="header-info">
+            <h1>XIPU Compass</h1>
+            <p class="subtitle">基于XJTLU知识库的智能问答系统</p>
+          </div>
+          <div class="header-controls">
+            <div class="connection-status" id="connectionStatus">
+              <span class="status-dot"></span>
+              <span class="status-text">检测中...</span>
+            </div>
+          </div>
+        </header>
+        
+        <div id="messages" class="messages"></div>
+        
+        
+        <form id="form" class="composer">
+          <textarea id="message" rows="3" placeholder="输入问题，例如：西浦有哪些专业？&#10;或切换身份：请作为招生顾问..."></textarea>
+          <div class="composer-actions">
+            <button type="button" class="btn-clear" id="clearBtn" title="清空对话">清空</button>
+            <button type="submit" class="btn-send">发送</button>
+          </div>
+        </form>
+      </section>
+      
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <h3>配置信息</h3>
+          <button type="button" class="btn-close-sidebar" id="closeSidebar">×</button>
+        </div>
+        <div class="sidebar-content">
+          <div class="config-section">
+            <h4>连接状态</h4>
+            <div class="config-item">
+              <span class="config-label">服务状态:</span>
+              <span class="config-value" id="configStatus">-</span>
+            </div>
+            <div class="config-item">
+              <span class="config-label">对话模型:</span>
+              <span class="config-value" id="configChatModel">-</span>
+            </div>
+            <div class="config-item">
+              <span class="config-label">Embedding:</span>
+              <span class="config-value" id="configEmbedModel">-</span>
+            </div>
+          </div>
+          <div class="config-section">
+            <button type="button" class="btn-reload-config" id="reloadConfig">刷新配置</button>
+          </div>
+        </div>
+      </aside>
+      
+      <button type="button" class="btn-settings" id="openSidebar" title="设置">⚙</button>
+    </main>
+    <script src="/static/main.js"></script>
+  </body>
+</html>

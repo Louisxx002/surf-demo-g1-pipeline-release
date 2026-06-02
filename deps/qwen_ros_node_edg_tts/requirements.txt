@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+transformers
+torch
+edge-tts
+requests
+accelerate
