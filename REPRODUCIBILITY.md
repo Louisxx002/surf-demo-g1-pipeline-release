@@ -38,6 +38,9 @@ These are intentionally ignored:
 - Ollama with `nomic-embed-text` available locally.
 - Unitree G1 network access through the configured interface, default:
   - `enp8s0`
+- CycloneDDS through the bundled Unitree SDK:
+  - Python SDK dependency: `cyclonedds==0.10.2`
+  - C++ SDK libraries: bundled `ddsc` and `ddscxx`
 
 ## Local Configuration
 
@@ -79,6 +82,17 @@ The pipeline expects this binary unless overridden:
 ```text
 deps/unitree_g1_action_classifier_package/unitree_sdk2/build/bin/g1_arm_action_example
 ```
+
+Install the Python Unitree SDK so CycloneDDS is available in the main pipeline
+environment:
+
+```bash
+${QWEN_PYTHON:-$HOME/miniconda3/envs/qwen/bin/python} -m pip install -e deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python
+```
+
+DDS is bound to `UNITREE_NETWORK_INTERFACE`. If your robot or DDS peer is not
+discoverable by multicast, set `CYCLONEDDS_URI` in `config/local.env` with the
+correct peer IP for that machine.
 
 Restore/download wake-word ONNX model files under:
 

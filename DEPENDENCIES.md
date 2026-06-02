@@ -12,6 +12,22 @@ deps/unitree_g1_action_classifier_package/  Unitree action support source and SD
 xjtlu-rag-system/                           RAG service, knowledge DB, and vector index DB
 ```
 
+## DDS Dependencies
+
+```text
+Python Unitree SDK:
+  deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python
+  requires cyclonedds==0.10.2
+
+C++ Unitree SDK:
+  deps/unitree_g1_action_classifier_package/unitree_sdk2
+  links bundled ddsc and ddscxx libraries
+```
+
+The action runner build output is intentionally not tracked. Rebuild it locally
+so the executable can resolve the Unitree/CycloneDDS shared libraries for the
+current machine architecture.
+
 ## Intentionally Not Tracked
 
 ```text

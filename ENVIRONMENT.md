@@ -112,6 +112,45 @@ UNITREE_ENABLE="1"
 The startup script disables G1 audio/action execution automatically if the
 configured network interface is not active.
 
+## CycloneDDS / Unitree DDS
+
+The repo has two Unitree DDS paths:
+
+- Python Unitree SDK under `deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python`
+  declares `cyclonedds==0.10.2`.
+- C++ Unitree SDK under `deps/unitree_g1_action_classifier_package/unitree_sdk2`
+  links the bundled `ddsc` and `ddscxx` libraries.
+
+Install the Python SDK dependency in the main pipeline environment:
+
+```bash
+${QWEN_PYTHON:-$HOME/miniconda3/envs/qwen/bin/python} -m pip install -e deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python
+```
+
+The Python SDK generates CycloneDDS XML at runtime and binds DDS to
+`UNITREE_NETWORK_INTERFACE`. The integrated pipeline uses Unitree DDS for G1
+audio playback, lights, and action execution. If the configured interface is
+missing, `scripts/run_pipeline.sh` disables Unitree execution instead of
+starting with a bad DDS route.
+
+For cross-host discovery or a fixed peer, add `CYCLONEDDS_URI` in
+`config/local.env`:
+
+```bash
+CYCLONEDDS_URI='<CycloneDDS><Domain><General><NetworkInterfaceAddress>enp8s0</NetworkInterfaceAddress></General><Discovery><Peers><Peer address="ROBOT_OR_HOST_IP"/></Peers></Discovery></Domain></CycloneDDS>'
+```
+
+Check DDS setup:
+
+```bash
+ip -o link show "$UNITREE_NETWORK_INTERFACE"
+${QWEN_PYTHON:-$HOME/miniconda3/envs/qwen/bin/python} -c "import cyclonedds; print('cyclonedds ok')"
+ldd deps/unitree_g1_action_classifier_package/unitree_sdk2/build/bin/g1_arm_action_example | rg 'ddsc|ddscxx|not found'
+```
+
+If DDS fails, also inspect `/tmp/cdds.LOG` when CycloneDDS tracing is enabled
+by the Unitree SDK.
+
 ## Unitree Action Runner
 
 Build the G1 action runner:
