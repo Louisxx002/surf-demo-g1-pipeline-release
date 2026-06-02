@@ -3,6 +3,10 @@
 Integrated workspace for the SURF voice module, XJTLU RAG, TTS playback, and
 Unitree G1 action execution.
 
+For a fresh machine setup, read [REPRODUCIBILITY.md](REPRODUCIBILITY.md). This
+repo excludes large runtime assets and local secrets, so clone-only is not
+enough for the full robot demo.
+
 ## Pipeline
 
 ```text
