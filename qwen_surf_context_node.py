@@ -442,7 +442,7 @@ class QwenSurfContextNode(Node):
         self._set_wake_light_color("red", 255, 0, 0)
 
     def _set_wake_light_green(self) -> None:
-        self._set_wake_light_color("green", 0, 255, 0, effect="blink")
+        self._set_wake_light_color("green", 0, 255, 0)
 
     def _set_wake_light_blue(self) -> None:
         self._set_wake_light_color("blue", 0, 0, 255)
