@@ -339,6 +339,58 @@ def _build_direct_faq_context(message: str, source_db: str) -> str:
         return ""
 
 
+def _build_school_overview_context(message: str, source_db: str) -> tuple[str, list[dict[str, str]]]:
+    """Return the canonical school overview for broad XJTLU introduction queries."""
+    overview_terms = ["介绍", "简介", "概况", "是什么学校", "什么大学", "了解一下", "讲讲", "说说"]
+    school_terms = ["西交利物浦大学", "西交利物浦", "西浦", "xjtlu"]
+    lowered = message.lower()
+    if not any(term in lowered for term in school_terms):
+        return "", []
+    if not any(term in message for term in overview_terms):
+        return "", []
+
+    try:
+        conn = sqlite3.connect(source_db)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT title, content, category, source_url
+            FROM school_info
+            WHERE title LIKE '%学校概况%'
+               OR category LIKE '%学校简介%'
+               OR content LIKE '%合作创立%'
+            ORDER BY
+                CASE
+                    WHEN title LIKE '%学校概况%' THEN 0
+                    WHEN category LIKE '%学校简介%' THEN 1
+                    ELSE 2
+                END,
+                id
+            LIMIT 1
+            """
+        ).fetchone()
+        conn.close()
+    except Exception:
+        return "", []
+
+    if not row:
+        return "", []
+
+    context = (
+        f"[学校概况] 标题：{row['title']}\n"
+        f"分类：{row['category']}\n"
+        f"来源：{row['source_url']}\n"
+        f"内容：{row['content']}"
+    )
+    source = {
+        "title": row["title"],
+        "url": row["source_url"],
+        "category": row["category"],
+        "score": 1.0,
+    }
+    return context, [source]
+
+
 IDENTITY_MAP = {
     "招生顾问": "你是西交利物浦大学中文招生顾问，回答要清晰、谨慎、面向学生和家长。",
     "学术导师": "你是西交利物浦大学学术导师，回答要重视专业选择、课程路径和学术发展。",
@@ -435,6 +487,7 @@ async def chat(session_id: str, message: str) -> dict:
 
     direct_faq_context = _build_direct_faq_context(message, settings.source_db)
     programme_context = _build_programme_context(message, settings.source_db)
+    school_overview_context, direct_sources = _build_school_overview_context(message, settings.source_db)
 
     system = f"""
 {IDENTITY_MAP.get(identity, IDENTITY_MAP["校园助手"])}
@@ -443,7 +496,7 @@ async def chat(session_id: str, message: str) -> dict:
 1. 记住用户明确提供的身份属性，例如姓名、关注专业、语言偏好、对助手身份的要求。
 2. 能自然闲聊；闲聊问题不强行引用知识库。
 3. 涉及西交利物浦大学/XJTLU/专业/招生/学院/校园事实时，优先依据知识库上下文回答。
-   当知识库提供了"FAQ精准补充"或"专业数据库补充"内容时，必须以该内容为基础进行回答，不要说"知识库没有足够信息"。
+   当知识库提供了"学校概况补充"、"FAQ精准补充"或"专业数据库补充"内容时，必须以该内容为基础进行回答，不要说"知识库没有足够信息"。
 
 回答规则：
 - 使用中文，除非用户要求其他语言。
@@ -467,6 +520,7 @@ async def chat(session_id: str, message: str) -> dict:
 
 知识库上下文：
 {_format_context(results) if results else "无"}
+{f"\n\n【学校概况补充】\n{school_overview_context}" if school_overview_context else ""}
 {f"\n\n【FAQ精准补充】\n{direct_faq_context}" if direct_faq_context else ""}
 {f"\n\n【专业数据库补充】\n{programme_context}" if programme_context else ""}
 
@@ -499,7 +553,7 @@ async def chat(session_id: str, message: str) -> dict:
         "action": action,
         "identity": identity,
         "profile": profile,
-        "sources": [
+        "sources": direct_sources + [
             {
                 "title": item.title,
                 "url": item.url,
