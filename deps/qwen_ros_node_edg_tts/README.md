@@ -29,7 +29,7 @@ Unitree G1 扬声器播放
 - 支持只说唤醒词后，下一句话作为命令。
 - 支持键盘切换唤醒词模式和持续监听模式。
 - 支持把 Unitree 官方 DDS `rt/audio_msg` 安全转发到 ROS2 `/audio_msg`。
-- 支持把 Qwen 回复送入 `/home/louisxx/unitree_g1_action_classifier_package`，分类并执行 G1 手臂动作。
+- 支持把 Qwen 回复送入 `<repo-root>/deps/unitree_g1_action_classifier_package`，分类并执行 G1 手臂动作。
 - 支持集中配置模型路径、ROS topic、网口、音量、生成参数和动作桥参数。
 - 运行产物统一写入 `runtime/`，不污染项目根目录。
 
@@ -99,28 +99,28 @@ qwen_ros_node_edg_tts/
 
 - `third_party/unitree_sdk2_python`
   - 随项目携带的 Unitree SDK2 Python 源码包。
-  - `unitree_audio_player.py` 默认从这里导入 `unitree_sdk2py`，不再依赖外部 `/home/louisxx/unitree_g1/unitree_sdk2_python`。
+  - `unitree_audio_player.py` 默认从这里导入 `unitree_sdk2py`，不再依赖外部 `<repo-root>/deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python`。
 
 ## 配置
 
 常用配置在：
 
 ```bash
-/home/louisxx/qwen_ros_node_edg_tts/config/default.env
+<repo-root>/deps/qwen_ros_node_edg_tts/config/default.env
 ```
 
 重要配置：
 
 ```bash
 QWEN_AUDIO_TOPIC=/audio_msg
-QWEN_PYTHON=/home/louisxx/miniconda3/envs/qwen/bin/python
+QWEN_PYTHON=$HOME/miniconda3/envs/qwen/bin/python
 QWEN_SERVER_URL=http://127.0.0.1:8000/infer
 QWEN_REQUEST_TIMEOUT_SEC=15
 QWEN_WAKE_WORDS="西浦小g,小g,小G,小纪,小记,小机,小鸡,hey gee,hey g,XJTLU Gee,せいほくジーくん,ジーくん"
 QWEN_ALWAYS_LISTEN=0
 
-QWEN_MODEL_PATH=/home/louisxx/Qwen3.5-0.8B/model
-QWEN_RUNTIME_DIR=/home/louisxx/qwen_ros_node_edg_tts/runtime
+QWEN_MODEL_PATH=<repo-root>/deps/Qwen3.5-0.8B/model
+QWEN_RUNTIME_DIR=<repo-root>/deps/qwen_ros_node_edg_tts/runtime
 QWEN_SERVER_HOST=0.0.0.0
 QWEN_SERVER_PORT=8000
 QWEN_MAX_NEW_TOKENS=50
@@ -142,7 +142,7 @@ QWEN_ACTION_AUTO_RELEASE=0
 Python 依赖：
 
 ```bash
-cd /home/louisxx/qwen_ros_node_edg_tts
+cd <repo-root>/deps/qwen_ros_node_edg_tts
 conda activate qwen
 pip install -r requirements.txt
 ```
@@ -163,7 +163,7 @@ source /opt/ros/jazzy/setup.bash
 Unitree SDK2：
 
 ```bash
-export PYTHONPATH=/home/louisxx/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python:$PYTHONPATH
+export PYTHONPATH=<repo-root>/deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python:$PYTHONPATH
 ```
 
 启动脚本里已经处理了 ROS2 source 和 Unitree SDK2 `PYTHONPATH`。
@@ -175,14 +175,14 @@ export PYTHONPATH=/home/louisxx/qwen_ros_node_edg_tts/third_party/unitree_sdk2_p
 持续监听模式：
 
 ```bash
-cd /home/louisxx/qwen_ros_node_edg_tts
+cd <repo-root>/deps/qwen_ros_node_edg_tts
 ./scripts/run_full_pipeline.sh --mode listen
 ```
 
 唤醒词模式：
 
 ```bash
-cd /home/louisxx/qwen_ros_node_edg_tts
+cd <repo-root>/deps/qwen_ros_node_edg_tts
 ./scripts/run_full_pipeline.sh --mode wake --wake-word "小g"
 ```
 
@@ -199,7 +199,7 @@ cd /home/louisxx/qwen_ros_node_edg_tts
 如果你要排查某一段，也可以分开跑：
 
 ```bash
-cd /home/louisxx/qwen_ros_node_edg_tts
+cd <repo-root>/deps/qwen_ros_node_edg_tts
 ./scripts/run_server.sh
 ./scripts/run_ros_node.sh
 ./scripts/run_audio_player.sh
@@ -230,21 +230,21 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u al
 如果要看桥接有没有收到机器人语音：
 
 ```bash
-cd /home/louisxx/qwen_ros_node_edg_tts
+cd <repo-root>/deps/qwen_ros_node_edg_tts
 ./scripts/monitor_audio_msg.sh
 ```
 
 桥接脚本仍然保留，单独排查时可以直接运行：
 
 ```bash
-cd /home/louisxx/qwen_ros_node_edg_tts
+cd <repo-root>/deps/qwen_ros_node_edg_tts
 ./scripts/run_asr_bridge.sh
 ```
 
 停止全流程：
 
 ```bash
-cd /home/louisxx/qwen_ros_node_edg_tts
+cd <repo-root>/deps/qwen_ros_node_edg_tts
 ./scripts/stop_full_pipeline.sh
 ```
 
@@ -299,7 +299,7 @@ quit   退出节点
 不启动模型、不连接机器人，只做基础检查：
 
 ```bash
-cd /home/louisxx/qwen_ros_node_edg_tts
+cd <repo-root>/deps/qwen_ros_node_edg_tts
 ./scripts/check_project.sh
 ```
 
@@ -316,7 +316,7 @@ cd /home/louisxx/qwen_ros_node_edg_tts
 全面检查：
 
 ```bash
-cd /home/louisxx/qwen_ros_node_edg_tts
+cd <repo-root>/deps/qwen_ros_node_edg_tts
 ./scripts/check_full_pipeline.sh
 ```
 
@@ -404,7 +404,7 @@ G1 不播放：
 ROS 节点现在会在拿到 Qwen 回复并生成 `runtime/tts.wav` 后，把回复文本送入：
 
 ```text
-/home/louisxx/unitree_g1_action_classifier_package/arm_action_classifier/arm_action_classifier.py
+<repo-root>/deps/unitree_g1_action_classifier_package/arm_action_classifier/arm_action_classifier.py
 ```
 
 默认配置会使用通义千问分类动作，并通过官方 runner 执行动作：
@@ -425,7 +425,7 @@ export DASHSCOPE_API_KEY='sk-你的真实key'
 三进程启动顺序：
 
 ```bash
-cd /home/louisxx/qwen_ros_node_edg_tts
+cd <repo-root>/deps/qwen_ros_node_edg_tts
 ./scripts/run_server.sh
 ./scripts/run_ros_node.sh
 ./scripts/run_audio_player.sh
@@ -447,7 +447,7 @@ QWEN_ACTION_EXECUTE=0 ./scripts/run_ros_node.sh
 如果机器人返回 `arm_holding_release_required`，可以先手动释放手臂：
 
 ```bash
-/home/louisxx/unitree_g1_action_classifier_package/unitree_sdk2/build/bin/g1_arm_action_example \
+<repo-root>/deps/unitree_g1_action_classifier_package/unitree_sdk2/build/bin/g1_arm_action_example \
   --network enp8s0 \
   --id 99
 ```

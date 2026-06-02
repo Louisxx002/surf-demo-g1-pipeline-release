@@ -144,14 +144,14 @@ logs/YYYYMMDD_HHMMSS_sNNN/
 Start full pipeline:
 
 ```bash
-cd /home/louisxx/ProjectArchive/surf/2526/surf_qwen_clean_workspace
+cd <repo-root>
 ./scripts/run_pipeline.sh --mode wake
 ```
 
 Stop full pipeline:
 
 ```bash
-cd /home/louisxx/ProjectArchive/surf/2526/surf_qwen_clean_workspace
+cd <repo-root>
 ./scripts/stop_pipeline.sh
 ```
 
@@ -166,7 +166,7 @@ journalctl --user -u surf-qwen-audio-player -f
 Check workspace:
 
 ```bash
-cd /home/louisxx/ProjectArchive/surf/2526/surf_qwen_clean_workspace
+cd <repo-root>
 ./scripts/check_pipeline.sh
 ```
 

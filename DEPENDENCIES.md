@@ -18,8 +18,8 @@ deps/ollama-home/models/                    Current Ollama embedding model cache
 
 ```text
 Conda environments:
-  /home/louisxx/miniconda3/envs/voice/bin/python
-  /home/louisxx/miniconda3/envs/qwen/bin/python
+  $HOME/miniconda3/envs/voice/bin/python
+  $HOME/miniconda3/envs/qwen/bin/python
 
 Generated runtime files:
   __pycache__, .pytest_cache, runtime logs, temporary TTS files

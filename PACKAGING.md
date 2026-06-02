@@ -3,8 +3,8 @@
 Build a relocatable release bundle with:
 
 ```bash
-cd /home/louisxx/ProjectArchive/surf/2526/surf_qwen_clean_workspace
-./scripts/build_release_bundle.sh --output /home/louisxx/surf_qwen_release --name surf_qwen_bundle --tar
+cd <repo-root>
+./scripts/build_release_bundle.sh --output ./release-output --name surf_qwen_bundle --tar
 ```
 
 What the bundle includes:

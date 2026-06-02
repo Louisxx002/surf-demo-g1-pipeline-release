@@ -46,7 +46,7 @@ playback finished       -> blue
 Start the full pipeline:
 
 ```bash
-cd /home/louisxx/ProjectArchive/surf/2526/surf_qwen_clean_workspace
+cd <repo-root>
 ./scripts/run_pipeline.sh --mode wake
 ```
 
@@ -151,7 +151,7 @@ OLLAMA_HOME=deps/ollama-home
 Python interpreters are external environment dependencies:
 
 ```text
-QWEN_PYTHON=/home/louisxx/miniconda3/envs/qwen/bin/python
+QWEN_PYTHON=$HOME/miniconda3/envs/qwen/bin/python
 VOICE_PYTHON from deps/SURF2026_VoiceModule-main/config/default.env
 ```
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+DEPS_ROOT = PROJECT_ROOT.parent
 
 
 def _env(name: str, default: str) -> str:
@@ -51,7 +52,7 @@ class ProjectConfig:
     wake_words: tuple[str, ...] = _env_list("QWEN_WAKE_WORDS", ("西浦小g", "小g", "小G"))
     always_listen: bool = _env_bool("QWEN_ALWAYS_LISTEN", False)
 
-    model_path: str = _env("QWEN_MODEL_PATH", "/home/louisxx/Qwen3.5-0.8B/model")
+    model_path: str = _env("QWEN_MODEL_PATH", str(DEPS_ROOT / "Qwen3.5-0.8B" / "model"))
     server_host: str = _env("QWEN_SERVER_HOST", "0.0.0.0")
     server_port: int = _env_int("QWEN_SERVER_PORT", 8000)
     max_new_tokens: int = _env_int("QWEN_MAX_NEW_TOKENS", 50)
@@ -68,18 +69,18 @@ class ProjectConfig:
     action_auto_release: bool = _env_bool("QWEN_ACTION_AUTO_RELEASE", False)
     action_python: str = _env(
         "QWEN_ACTION_PYTHON",
-        "/home/louisxx/unitree_g1_action_classifier_package/.venv/bin/python",
+        str(DEPS_ROOT / "unitree_g1_action_classifier_package" / ".venv" / "bin" / "python"),
     )
     action_script: Path = Path(
         _env(
             "QWEN_ACTION_SCRIPT",
-            "/home/louisxx/unitree_g1_action_classifier_package/arm_action_classifier/arm_action_classifier.py",
+            str(DEPS_ROOT / "unitree_g1_action_classifier_package" / "arm_action_classifier" / "arm_action_classifier.py"),
         )
     )
     action_runner: Path = Path(
         _env(
             "QWEN_ACTION_RUNNER",
-            "/home/louisxx/unitree_g1_action_classifier_package/unitree_sdk2/build/bin/g1_arm_action_example",
+            str(DEPS_ROOT / "unitree_g1_action_classifier_package" / "unitree_sdk2" / "build" / "bin" / "g1_arm_action_example"),
         )
     )
 

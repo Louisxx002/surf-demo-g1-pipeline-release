@@ -49,7 +49,7 @@
 ## 安装 Hugging Face 依赖
 
 ```bash
-cd /Users/louisxx/Documents/Codex/2026-05-13/1-demo-unitree-g1-sdk-high
+cd <repo-root>/deps/unitree_g1_action_classifier_package
 python3 -m venv .venv
 .venv/bin/python -m pip install transformers torch sentencepiece protobuf
 ```
@@ -65,7 +65,7 @@ export DASHSCOPE_API_KEY="你的APIKey"
 然后运行：
 
 ```bash
-cd /Users/louisxx/Documents/Codex/2026-05-13/1-demo-unitree-g1-sdk-high/arm_action_classifier
+cd <repo-root>/deps/unitree_g1_action_classifier_package/arm_action_classifier
 ../.venv/bin/python arm_action_classifier.py "西交利物浦大学非常棒"
 ```
 

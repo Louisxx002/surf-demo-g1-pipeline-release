@@ -5,7 +5,7 @@
 ## 1. 进入项目目录
 
 ```bash
-cd /home/louisxx/ProjectArchive/surf/2526/surf_qwen_clean_workspace
+cd <repo-root>
 ```
 
 后续命令都默认在这个目录下执行。
@@ -87,7 +87,7 @@ Reply backend: rag
 建议另开一个终端，进入项目目录：
 
 ```bash
-cd /home/louisxx/ProjectArchive/surf/2526/surf_qwen_clean_workspace
+cd <repo-root>
 ```
 
 查看全部日志：
@@ -223,7 +223,7 @@ Core voice/RAG/DeepSeek pipeline will still start; G1 audio, lights, and action 
 
 ```bash
 # 进入项目
-cd /home/louisxx/ProjectArchive/surf/2526/surf_qwen_clean_workspace
+cd <repo-root>
 
 # 预检
 ./scripts/check_pipeline.sh

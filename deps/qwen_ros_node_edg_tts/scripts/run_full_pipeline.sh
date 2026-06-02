@@ -96,7 +96,7 @@ systemctl --user stop \
   qwen-audio-player.service >/dev/null 2>&1 || true
 
 systemd-run --user --unit=qwen-server --same-dir --collect "${SYSTEMD_ENV[@]}" \
-  /home/louisxx/qwen_ros_node_edg_tts/scripts/run_server.sh >/dev/null
+  "${PROJECT_ROOT}/scripts/run_server.sh" >/dev/null
 
 echo "Waiting for Qwen server to become healthy..."
 for _ in $(seq 1 120); do
@@ -109,10 +109,10 @@ for _ in $(seq 1 120); do
 done
 
 systemd-run --user --unit=qwen-ros-node --same-dir --collect "${SYSTEMD_ENV[@]}" \
-  /home/louisxx/qwen_ros_node_edg_tts/scripts/run_ros_node.sh >/dev/null
+  "${PROJECT_ROOT}/scripts/run_ros_node.sh" >/dev/null
 
 systemd-run --user --unit=qwen-audio-player --same-dir --collect "${SYSTEMD_ENV[@]}" \
-  /home/louisxx/qwen_ros_node_edg_tts/scripts/run_audio_player.sh >/dev/null
+  "${PROJECT_ROOT}/scripts/run_audio_player.sh" >/dev/null
 
 echo "Full pipeline started."
 echo "Mode: ${MODE}"

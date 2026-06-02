@@ -33,7 +33,7 @@ These are intentionally ignored:
 - Ubuntu/WSL2 environment similar to the original deployment.
 - ROS2 Jazzy installed at `/opt/ros/jazzy`.
 - Python/conda environment for the main pipeline, default:
-  - `/home/louisxx/miniconda3/envs/qwen/bin/python`
+  - `$HOME/miniconda3/envs/qwen/bin/python`
 - DeepSeek-compatible OpenAI API key.
 - Ollama with `nomic-embed-text` available locally.
 - Unitree G1 network access through the configured interface, default:

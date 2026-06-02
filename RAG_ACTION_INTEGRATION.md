@@ -21,7 +21,7 @@ directly so the existing action path receives the final reply unchanged.
 ## Enable RAG
 
 ```bash
-cd /home/louisxx/ProjectArchive/surf/2526/surf_qwen_clean_workspace
+cd <repo-root>
 ./scripts/env_set.sh QWEN_REPLY_BACKEND rag
 ./scripts/run_pipeline.sh
 ```
