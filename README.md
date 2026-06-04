@@ -50,6 +50,20 @@ cd <repo-root>
 ./scripts/run_pipeline.sh --mode wake
 ```
 
+Use the external USB mic streamed from the robot:
+
+```bash
+# robot SSH session
+cd <SURF2026_VoiceModule-main>
+python3 tools/stream_usb_mic.py --port 5556
+
+# PC / WSL session
+cd <repo-root>
+VOICE_ROBOT_MIC_PORT=5556 ./scripts/run_pipeline.sh --mode wake
+```
+
+The default robot microphone path still uses `VOICE_ROBOT_MIC_PORT=5555`.
+
 Stop the pipeline:
 
 ```bash
