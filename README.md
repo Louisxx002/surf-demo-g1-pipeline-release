@@ -36,7 +36,7 @@ Light states:
 ```text
 standby                 -> blue
 wake / waiting command  -> red
-ASR accepted / thinking -> green
+ASR accepted / thinking -> blinking green
 reply playback          -> blue
 playback finished       -> blue
 ```

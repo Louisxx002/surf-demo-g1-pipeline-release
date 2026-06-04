@@ -442,7 +442,7 @@ class QwenSurfContextNode(Node):
         self._set_wake_light_color("red", 255, 0, 0)
 
     def _set_wake_light_green(self) -> None:
-        self._set_wake_light_color("green", 0, 255, 0)
+        self._set_wake_light_color("green", 0, 255, 0, effect="blink")
 
     def _set_wake_light_blue(self) -> None:
         self._set_wake_light_color("blue", 0, 0, 255)
@@ -657,6 +657,16 @@ class QwenSurfContextNode(Node):
             self._action_lock.release()
 
     def _run_thinking_action(self) -> None:
+        if not CONFIG.thinking_action_enable:
+            self._session_record("thinking_action_skipped", reason="disabled", session_id=self._session_id)
+            return
+        if not CONFIG.action_enable or not CONFIG.action_execute:
+            self._session_record("thinking_action_skipped", reason="action_disabled", session_id=self._session_id)
+            return
+        if not self._action_lock.acquire(blocking=False):
+            self.get_logger().warn("Skipping thinking action because another action is still running.")
+            self._session_record("thinking_action_skipped", reason="busy", session_id=self._session_id)
+            return
         threading.Thread(target=self._run_thinking_action_script, daemon=True).start()
 
     def _run_thinking_action_script(self) -> None:
@@ -684,6 +694,8 @@ class QwenSurfContextNode(Node):
             )
         except Exception as exc:
             self.get_logger().warn(f"Thinking action failed: {exc}")
+        finally:
+            self._action_lock.release()
 
     @staticmethod
     def _qwen_tts_url() -> str:

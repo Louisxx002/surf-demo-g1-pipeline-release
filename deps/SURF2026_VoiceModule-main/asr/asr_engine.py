@@ -68,8 +68,7 @@ class ASREngine:
         with self._suppress_model_output():
             result = self._model.generate(input=audio, batch_size_s=300)
         text = result[0].get("text", "").strip() if result else ""
-        if text:
-            self._on_result(text)
+        self._on_result(text)
 
     @staticmethod
     @contextlib.contextmanager

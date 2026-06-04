@@ -140,6 +140,7 @@ class SurfVoiceRuntime:
             self._cancel_asr_deadline("vad_speech")
         if not is_speech and self._recording and time.monotonic() > self._vad_holdoff_until:
             self._recording = False
+            self._asr_deadline = 0.0
             self._save_audio()
             self._asr.stop_and_transcribe()
 
@@ -191,6 +192,15 @@ class SurfVoiceRuntime:
 
     def _cancel_asr_deadline(self, reason: str) -> None:
         if not self._asr_deadline:
+            return
+        if os.environ.get("VOICE_KEEP_ASR_DEADLINE", "").strip().lower() in ("1", "true", "yes", "on"):
+            logger.info("asr deadline kept despite: %s", reason)
+            if self._session_log:
+                self._session_log.record(
+                    "asr_deadline_kept",
+                    reason=reason,
+                    session_id=self._session_id or "default",
+                )
             return
         self._asr_deadline = 0.0
         logger.info("asr deadline cancelled: %s", reason)

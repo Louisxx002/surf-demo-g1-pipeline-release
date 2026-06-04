@@ -72,6 +72,7 @@ class ProjectConfig:
     wake_ack_action_label: str = _env("SURF_QWEN_WAKE_ACK_ACTION_LABEL", "面前挥手")
     thinking_ack_enable: bool = _env_bool("SURF_QWEN_THINKING_ACK_ENABLE", True)
     thinking_ack_text: str = _env("SURF_QWEN_THINKING_ACK_TEXT", "收到，我在思考")
+    thinking_action_enable: bool = _env_bool("SURF_QWEN_THINKING_ACTION_ENABLE", False)
     wake_listen_sec: float = _env_float("SURF_QWEN_WAKE_LISTEN_SEC", 8.0)
 
     model_path: str = _env("QWEN_MODEL_PATH", str(DEPS_ROOT / "Qwen3.5-0.8B" / "model"))

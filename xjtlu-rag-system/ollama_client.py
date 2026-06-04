@@ -75,6 +75,7 @@ async def _openai_generate(prompt: str, system: str | None = None) -> str:
             {"role": "system", "content": system or ""},
             {"role": "user", "content": prompt},
         ],
+        "thinking": {"type": "disabled"},
         "temperature": 0.3,
         "top_p": 0.9,
         "stream": False,
