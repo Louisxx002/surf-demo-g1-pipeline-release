@@ -10,7 +10,7 @@ stream_usb_mic.py — 在机器人上运行，把 USB 麦克风音频通过 UDP 
 查看 USB 麦设备号：
     arecord -l
 
-如果 USB 麦不是 hw:1,0，用 --device 参数指定：
+如果 USB 麦不是 hw:0,0，用 --device 参数指定：
     python3 tools/stream_usb_mic.py --device hw:2,0
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ import sys
 
 DEST_IP   = "192.168.123.222"   # 电脑 IP（eth1 在机器人网段的地址）
 PORT      = 5556                # 避免和原生麦的 5555 冲突
-DEVICE    = "hw:1,0"            # USB 麦默认 ALSA 设备，arecord -l 可查
+DEVICE    = "hw:0,0"            # USB 麦默认 ALSA 设备，arecord -l 可查
 RATE      = 16000
 FRAME_MS  = 20
 FRAME_BYTES = int(RATE * FRAME_MS / 1000) * 2  # 640 bytes = 320 samples × 16bit
@@ -30,7 +30,7 @@ FRAME_BYTES = int(RATE * FRAME_MS / 1000) * 2  # 640 bytes = 320 samples × 16bi
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="USB 麦克风 UDP 流发送器")
-    parser.add_argument("--device",  default=DEVICE,   help="ALSA 设备（默认 hw:1,0）")
+    parser.add_argument("--device",  default=DEVICE,   help="ALSA 设备（默认 hw:0,0）")
     parser.add_argument("--dest",    default=DEST_IP,  help="目标 IP（电脑 IP）")
     parser.add_argument("--port",    default=PORT, type=int, help="目标端口（默认 5556）")
     args = parser.parse_args()
