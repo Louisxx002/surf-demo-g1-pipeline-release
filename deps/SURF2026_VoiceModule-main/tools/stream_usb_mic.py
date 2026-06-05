@@ -20,7 +20,7 @@ import socket
 import subprocess
 import sys
 
-DEST_IP   = "192.168.123.225"   # 电脑 IP（eth1 在机器人网段的地址）
+DEST_IP   = "192.168.123.222"   # 电脑 IP（eth1 在机器人网段的地址）
 PORT      = 5556                # 避免和原生麦的 5555 冲突
 DEVICE    = "hw:1,0"            # USB 麦默认 ALSA 设备，arecord -l 可查
 RATE      = 16000

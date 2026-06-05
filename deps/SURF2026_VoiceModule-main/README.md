@@ -57,17 +57,17 @@ VOICE_VAD_SILENCE_FRAMES=75
 
 ```bash
 # 机器人 SSH 终端
-python3 tools/stream_usb_mic.py --port 5556
+python3 tools/stream_usb_mic.py --dest 192.168.123.222 --port 5556
 ```
 
 电脑端接入：
 
 ```bash
-VOICE_AUDIO_SOURCE=robot VOICE_ROBOT_MIC_PORT=5556 python run_robot.py
+VOICE_AUDIO_SOURCE=robot VOICE_ROBOT_MIC_IF=192.168.123.222 VOICE_ROBOT_MIC_PORT=5556 python run_robot.py
 ```
 
 在集成 workspace 里运行完整 pipeline 时同样使用端口覆盖：
 
 ```bash
-VOICE_ROBOT_MIC_PORT=5556 ./scripts/run_pipeline.sh --mode wake
+VOICE_ROBOT_MIC_IF=192.168.123.222 VOICE_ROBOT_MIC_PORT=5556 ./scripts/run_pipeline.sh --mode wake
 ```

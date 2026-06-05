@@ -55,11 +55,11 @@ Use the external USB mic streamed from the robot:
 ```bash
 # robot SSH session
 cd <SURF2026_VoiceModule-main>
-python3 tools/stream_usb_mic.py --port 5556
+python3 tools/stream_usb_mic.py --dest 192.168.123.222 --port 5556
 
 # PC / WSL session
 cd <repo-root>
-VOICE_ROBOT_MIC_PORT=5556 ./scripts/run_pipeline.sh --mode wake
+VOICE_ROBOT_MIC_IF=192.168.123.222 VOICE_ROBOT_MIC_PORT=5556 ./scripts/run_pipeline.sh --mode wake
 ```
 
 The default robot microphone path still uses `VOICE_ROBOT_MIC_PORT=5555`.
