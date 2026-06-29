@@ -96,7 +96,21 @@ copy_tree() {
 
 copy_tree "${WORKSPACE_ROOT}" "${TARGET_ROOT}/workspace/surf_qwen_workspace" \
   --exclude '.git' \
+  --exclude '.agents' \
+  --exclude '.codex' \
+  --exclude '.env' \
+  --exclude '*.local.env' \
+  --exclude 'config/local.env' \
+  --exclude 'deps' \
   --exclude 'runtime' \
+  --exclude 'release-output' \
+  --exclude 'surf_qwen_bundle' \
+  --exclude 'surf_qwen_bundle.tar' \
+  --exclude 'logs' \
+  --exclude 'logs.zip' \
+  --exclude '*.log' \
+  --exclude '*.wav' \
+  --exclude '*.mp3' \
   --exclude '__pycache__' \
   --exclude '.pytest_cache'
 
@@ -132,10 +146,12 @@ cat > "${TARGET_ROOT}/bundle.env.example" <<EOF
 # Fill these in on the target machine before running ./run.sh
 export VOICE_PYTHON="/path/to/voice/env/bin/python"
 export QWEN_PYTHON="/path/to/qwen/env/bin/python"
+export OPENAI_API_KEY="sk-your-deepseek-api-key"
 
 # Optional overrides if the target machine needs custom network settings.
 export UNITREE_NETWORK_INTERFACE="${UNITREE_NETWORK_INTERFACE:-enp8s0}"
 export UNITREE_DOMAIN_ID="${UNITREE_DOMAIN_ID:-0}"
+export DASHSCOPE_API_KEY=""
 EOF
 
 cat > "${TARGET_ROOT}/bundle.env" <<EOF
@@ -154,6 +170,8 @@ export QWEN_ACTION_PYTHON="\${QWEN_ACTION_PYTHON:-\${QWEN_PYTHON:-\${VOICE_PYTHO
 export QWEN_ACTION_SCRIPT="${TARGET_ROOT}/deps/unitree_g1_action_classifier_package/arm_action_classifier/arm_action_classifier.py"
 export QWEN_ACTION_RUNNER="${TARGET_ROOT}/deps/unitree_g1_action_classifier_package/unitree_sdk2/build/bin/g1_arm_action_example"
 export QWEN_RUNTIME_DIR="${TARGET_ROOT}/workspace/surf_qwen_workspace/runtime"
+export OPENAI_API_KEY="\${OPENAI_API_KEY:-}"
+export DASHSCOPE_API_KEY="\${DASHSCOPE_API_KEY:-}"
 EOF
 
 cat > "${TARGET_ROOT}/run.sh" <<'EOF'

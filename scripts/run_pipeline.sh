@@ -214,9 +214,15 @@ done
 
 pkill -f 'asr_dds_to_ros_bridge.py --network' >/dev/null 2>&1 || true
 
+VOICE_SYSTEMD_ENV=(
+  --setenv=VOICE_AUDIO_SOURCE="${VOICE_AUDIO_SOURCE:-robot}"
+  --setenv=VOICE_ROBOT_MIC_IF="${VOICE_ROBOT_MIC_IF:-192.168.123.222}"
+  --setenv=VOICE_ROBOT_MIC_PORT="${VOICE_ROBOT_MIC_PORT:-5555}"
+)
+
 start_unit surf-ros-bridge "${WORKSPACE_ROOT}/scripts/run_surf_ros_bridge.sh"
 
-start_unit surf-voice-runtime "${WORKSPACE_ROOT}/scripts/run_surf_voice_runtime.sh"
+start_unit surf-voice-runtime "${VOICE_SYSTEMD_ENV[@]}" "${WORKSPACE_ROOT}/scripts/run_surf_voice_runtime.sh"
 
 if [[ "${QWEN_REPLY_BACKEND}" == "rag" ]]; then
   test -f "${WORKSPACE_ROOT}/xjtlu-rag-system/app.py"

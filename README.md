@@ -115,11 +115,17 @@ Put machine-specific values and secrets in `config/local.env`. This file is
 loaded after `config/default.env` and is ignored by git:
 
 ```bash
-cat > config/local.env <<'EOF'
-OPENAI_API_KEY="sk-your-deepseek-api-key"
-UNITREE_NETWORK_INTERFACE="enp8s0"
-QWEN_PYTHON="${HOME}/miniconda3/envs/qwen/bin/python"
-EOF
+cp config/local.env.example config/local.env
+```
+
+Then edit `config/local.env` for the target machine, especially
+`OPENAI_API_KEY`, `QWEN_PYTHON`, `VOICE_PYTHON`, and the Unitree network values.
+
+Fresh installs should use the top-level dependency files:
+
+```bash
+python -m pip install -r requirements-qwen.txt
+python -m pip install -r requirements-voice.txt
 ```
 
 Switch reply backend:

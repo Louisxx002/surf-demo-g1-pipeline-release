@@ -1,7 +1,1 @@
-transformers
-torch
-sentencepiece
-protobuf
-certifi
-cmake
-socksio
+-r ../../requirements-qwen.txt

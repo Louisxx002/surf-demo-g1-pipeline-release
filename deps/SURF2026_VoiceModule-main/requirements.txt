@@ -1,8 +1,1 @@
-openwakeword
-webrtcvad-wheels
-pyaudio
-sounddevice
-soundfile
-pyroomacoustics
-numpy
-scipy
+-r ../../requirements-voice.txt

@@ -1,7 +1,1 @@
-fastapi
-uvicorn
-transformers
-torch
-edge-tts
-requests
-accelerate
+-r ../../requirements-qwen.txt

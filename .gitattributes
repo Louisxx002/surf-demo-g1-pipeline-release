@@ -1,0 +1,14 @@
+config/local.env export-ignore
+*.local.env export-ignore
+.env export-ignore
+.agents export-ignore
+.codex export-ignore
+runtime export-ignore
+release-output export-ignore
+logs export-ignore
+logs.zip export-ignore
+*.log export-ignore
+*.wav export-ignore
+*.mp3 export-ignore
+__pycache__ export-ignore
+.pytest_cache export-ignore

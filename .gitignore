@@ -17,6 +17,7 @@ runtime/*
 !runtime/.gitkeep
 logs/
 logs.zip
+release-output/
 *.log
 *.wav
 *.mp3

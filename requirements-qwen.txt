@@ -1,0 +1,26 @@
+# Main pipeline environment (`qwen`).
+#
+# Install from the repository root:
+#   python -m pip install -r requirements-qwen.txt
+#
+# ROS2 Python packages such as rclpy/std_msgs are provided by ROS2 Jazzy and are
+# not installable from this requirements file.
+
+fastapi==0.136.0
+uvicorn[standard]==0.44.0
+httpx==0.28.1
+pydantic==2.13.1
+numpy==2.4.4
+
+edge-tts==7.2.8
+requests==2.33.1
+certifi==2026.2.25
+
+transformers==5.5.4
+accelerate==1.13.0
+torch==2.11.0
+
+opencv-python==4.13.0.92
+
+# Unitree Python SDK and CycloneDDS binding used by audio playback/lights.
+-e deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python

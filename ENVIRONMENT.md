@@ -40,19 +40,34 @@ The default config expects a main Python environment named `qwen`:
 conda create -n qwen python=3.12 -y
 conda activate qwen
 python -m pip install --upgrade pip
-python -m pip install -r xjtlu-rag-system/requirements.txt
-python -m pip install -r deps/qwen_ros_node_edg_tts/requirements.txt
-python -m pip install edge-tts requests certifi
+python -m pip install -r requirements-qwen.txt
 ```
 
 The SURF voice module may use a separate environment:
 
 ```bash
-conda create -n voice python=3.12 -y
+conda create -n voice python=3.11 -y
 conda activate voice
 python -m pip install --upgrade pip
-python -m pip install -r deps/SURF2026_VoiceModule-main/requirements.txt
+python -m pip install -r requirements-voice.txt
 ```
+
+The old component-level requirements files are kept as compatibility shims:
+
+```text
+xjtlu-rag-system/requirements.txt
+deps/qwen_ros_node_edg_tts/requirements.txt
+deps/unitree_g1_action_classifier_package/requirements.txt
+deps/SURF2026_VoiceModule-main/requirements.txt
+```
+
+They now delegate to the top-level `requirements-qwen.txt` or
+`requirements-voice.txt`, so use the top-level files for fresh installs.
+
+If PyTorch needs a machine-specific CPU/CUDA build, install the matching
+`torch` wheel first using the PyTorch command for that machine, then run the
+requirements install. The pinned requirement uses the base version and does not
+encode the local `+cpu` or `+cu*` build suffix.
 
 Set the actual paths in `config/local.env`:
 
@@ -198,14 +213,11 @@ joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx
 Example `config/local.env`:
 
 ```bash
-OPENAI_API_KEY="sk-your-deepseek-api-key"
-QWEN_PYTHON="${HOME}/miniconda3/envs/qwen/bin/python"
-VOICE_PYTHON="${HOME}/miniconda3/envs/voice/bin/python"
-UNITREE_NETWORK_INTERFACE="enp8s0"
-OLLAMA_BIN="ollama"
-OLLAMA_HOME="${HOME}/.ollama"
-OLLAMA_MODELS="${HOME}/.ollama/models"
+cp config/local.env.example config/local.env
 ```
+
+Then edit the copied file for `OPENAI_API_KEY`, Python paths, and robot network
+settings.
 
 ## Validate
 

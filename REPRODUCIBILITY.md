@@ -14,6 +14,7 @@ from Git on purpose.
   - `xjtlu-rag-system/xjtlu_knowledge.db`
   - `xjtlu-rag-system/rag_index.db`
 - Safe default configuration in `config/default.env`.
+- Reproducible local configuration template in `config/local.env.example`.
 
 ## What Is Not Included
 
@@ -32,8 +33,12 @@ These are intentionally ignored:
 
 - Ubuntu/WSL2 environment similar to the original deployment.
 - ROS2 Jazzy installed at `/opt/ros/jazzy`.
-- Python/conda environment for the main pipeline, default:
+- Python/conda environment for the main pipeline, installed from
+  `requirements-qwen.txt`, default path:
   - `$HOME/miniconda3/envs/qwen/bin/python`
+- Python/conda environment for the voice pipeline, installed from
+  `requirements-voice.txt`, default path:
+  - `$HOME/miniconda3/envs/voice/bin/python`
 - DeepSeek-compatible OpenAI API key.
 - Ollama with `nomic-embed-text` available locally.
 - Unitree G1 network access through the configured interface, default:
@@ -47,17 +52,20 @@ These are intentionally ignored:
 Create `config/local.env` after cloning. This file is git-ignored:
 
 ```bash
-cat > config/local.env <<'EOF'
-OPENAI_API_KEY="sk-your-deepseek-api-key"
-UNITREE_NETWORK_INTERFACE="enp8s0"
-QWEN_PYTHON="${HOME}/miniconda3/envs/qwen/bin/python"
-OLLAMA_BIN="ollama"
-OLLAMA_HOME="${HOME}/.ollama"
-EOF
+cp config/local.env.example config/local.env
 ```
 
-If using the bundled local paths from the original machine, restore them under
-`deps/` and point `config/local.env` at those paths.
+Then edit `config/local.env` and fill in values for the target machine,
+especially:
+
+- `OPENAI_API_KEY`
+- `QWEN_PYTHON`
+- `VOICE_PYTHON`
+- `UNITREE_NETWORK_INTERFACE`
+- `VOICE_ROBOT_MIC_IF` and `VOICE_ROBOT_MIC_PORT`
+
+If using restored local assets from another machine, place them under `deps/`
+or update the matching paths in `config/local.env`.
 
 ## Restore Missing Runtime Assets
 
@@ -84,7 +92,8 @@ deps/unitree_g1_action_classifier_package/unitree_sdk2/build/bin/g1_arm_action_e
 ```
 
 Install the Python Unitree SDK so CycloneDDS is available in the main pipeline
-environment:
+environment. This is already included by `requirements-qwen.txt`; run this only
+if you installed dependencies manually:
 
 ```bash
 ${QWEN_PYTHON:-$HOME/miniconda3/envs/qwen/bin/python} -m pip install -e deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python
@@ -159,3 +168,15 @@ Stop services:
 The repository alone is enough to inspect and develop the code, but a fresh
 machine cannot run the full robot demo until the excluded model/runtime assets,
 API key, ROS2 environment, and Unitree network/build outputs are restored.
+
+## Release Bundle
+
+For a handoff that includes local model/runtime assets, build a release bundle:
+
+```bash
+./scripts/build_release_bundle.sh --output ./release-output --name surf_qwen_bundle --tar
+```
+
+The bundle excludes local secrets and generated runtime output. The receiver
+must edit `bundle.env` or export environment variables for `VOICE_PYTHON`,
+`QWEN_PYTHON`, and `OPENAI_API_KEY` before running `./run.sh`.
