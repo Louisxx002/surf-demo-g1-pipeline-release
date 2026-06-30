@@ -12,7 +12,7 @@ from rag_config import settings
 from vector_store import SearchResult, search
 
 
-ANSWER_MAX_CHARS = int(os.getenv("ANSWER_MAX_CHARS", "100"))
+ANSWER_MAX_CHARS = int(os.getenv("ANSWER_MAX_CHARS", "150"))
 
 
 @dataclass(frozen=True)
