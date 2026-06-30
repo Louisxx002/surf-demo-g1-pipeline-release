@@ -8,10 +8,10 @@ set -a
 source "${WORKSPACE_ROOT}/config/default.env"
 set +a
 
-export QWEN_RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
-export PYTHONPATH="${WORKSPACE_ROOT}:${QWEN_ROOT}/third_party/unitree_sdk2_python:${PYTHONPATH:-}"
+export LLM_RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
+export PYTHONPATH="${WORKSPACE_ROOT}:${LLM_ROOT}/third_party/unitree_sdk2_python:${PYTHONPATH:-}"
 export NO_PROXY="127.0.0.1,localhost,${NO_PROXY:-}"
 export no_proxy="127.0.0.1,localhost,${no_proxy:-}"
-mkdir -p "${QWEN_RUNTIME_DIR}"
+mkdir -p "${LLM_RUNTIME_DIR}"
 
-exec "${QWEN_PYTHON}" -m uvicorn qwen_server:app --host "${QWEN_SERVER_HOST}" --port "${QWEN_SERVER_PORT}"
+exec "${LLM_PYTHON}" -m uvicorn llm_server:app --host "${LLM_SERVER_HOST}" --port "${LLM_SERVER_PORT}"

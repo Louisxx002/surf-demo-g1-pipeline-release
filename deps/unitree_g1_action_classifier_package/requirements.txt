@@ -1,1 +1,1 @@
--r ../../requirements-qwen.txt
+-r ../../requirements-llm.txt

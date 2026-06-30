@@ -18,8 +18,8 @@ deps/Qwen3.5-0.8B/model/
 deps/ollama/
 deps/ollama-home/models/
 project_config.py
-qwen_server.py
-qwen_surf_context_node.py
+llm_server.py
+llm_surf_context_node.py
 surf_ros_bridge.py
 surf_voice_runtime.py
 unitree_audio_player.py
@@ -46,7 +46,7 @@ runtime/ros_logs/
 
 Bundled dependencies intentionally exclude generated caches, `.git` folders,
 runtime logs, and the action-classifier `.venv`. Rebuild or point
-`QWEN_ACTION_PYTHON` at an existing Python environment if that package needs
+`LLM_ACTION_PYTHON` at an existing Python environment if that package needs
 additional Python dependencies.
 
 ## Test Archives

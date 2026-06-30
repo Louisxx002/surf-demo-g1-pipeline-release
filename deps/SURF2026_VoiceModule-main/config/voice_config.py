@@ -60,7 +60,7 @@ class VoiceConfig:
         "VOICE_ASR_MODEL",
         str(Path.home() / ".cache" / "modelscope" / "hub" / "models" / "iic" / "speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"),
     )
-    asr_vad_model: str          = _env("VOICE_ASR_VAD_MODEL", "fsmn-vad")
+    asr_vad_model: str          = _env("VOICE_ASR_VAD_MODEL", "")
     asr_vad_max_single_segment_time: int = _env_int(
         "VOICE_ASR_VAD_MAX_SINGLE_SEGMENT_TIME",
         30000,

@@ -6,7 +6,7 @@ from Git on purpose.
 
 ## What Is Included
 
-- Integrated SURF/Qwen workspace source files.
+- Integrated SURF/LLM workspace source files.
 - SURF voice module source under `deps/SURF2026_VoiceModule-main/`.
 - Unitree SDK source/library headers under `deps/unitree_g1_action_classifier_package/unitree_sdk2/`.
 - Vendored Unitree Python SDK under `deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python/`.
@@ -34,8 +34,8 @@ These are intentionally ignored:
 - Ubuntu/WSL2 environment similar to the original deployment.
 - ROS2 Jazzy installed at `/opt/ros/jazzy`.
 - Python/conda environment for the main pipeline, installed from
-  `requirements-qwen.txt`, default path:
-  - `$HOME/miniconda3/envs/qwen/bin/python`
+  `requirements-llm.txt`, default path:
+  - `$HOME/miniconda3/envs/llm/bin/python`
 - Python/conda environment for the voice pipeline, installed from
   `requirements-voice.txt`, default path:
   - `$HOME/miniconda3/envs/voice/bin/python`
@@ -59,7 +59,7 @@ Then edit `config/local.env` and fill in values for the target machine,
 especially:
 
 - `OPENAI_API_KEY`
-- `QWEN_PYTHON`
+- `LLM_PYTHON`
 - `VOICE_PYTHON`
 - `UNITREE_NETWORK_INTERFACE`
 - `VOICE_ROBOT_MIC_IF` and `VOICE_ROBOT_MIC_PORT`
@@ -92,11 +92,11 @@ deps/unitree_g1_action_classifier_package/unitree_sdk2/build/bin/g1_arm_action_e
 ```
 
 Install the Python Unitree SDK so CycloneDDS is available in the main pipeline
-environment. This is already included by `requirements-qwen.txt`; run this only
+environment. This is already included by `requirements-llm.txt`; run this only
 if you installed dependencies manually:
 
 ```bash
-${QWEN_PYTHON:-$HOME/miniconda3/envs/qwen/bin/python} -m pip install -e deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python
+${LLM_PYTHON:-$HOME/miniconda3/envs/llm/bin/python} -m pip install -e deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python
 ```
 
 DDS is bound to `UNITREE_NETWORK_INTERFACE`. If your robot or DDS peer is not
@@ -116,12 +116,12 @@ The repo includes `keywords.txt` and `tokens.txt`, but not the ONNX binaries.
 The default source configuration is:
 
 ```text
-QWEN_REPLY_BACKEND=rag
+LLM_REPLY_BACKEND=rag
 CHAT_PROVIDER=openai
 CHAT_MODEL=deepseek-v4-pro
 EMBED_PROVIDER=ollama
 EMBED_MODEL=nomic-embed-text
-QWEN_ACTION_BACKEND=deepseek
+LLM_ACTION_BACKEND=deepseek
 ```
 
 Current flow:
@@ -174,9 +174,9 @@ API key, ROS2 environment, and Unitree network/build outputs are restored.
 For a handoff that includes local model/runtime assets, build a release bundle:
 
 ```bash
-./scripts/build_release_bundle.sh --output ./release-output --name surf_qwen_bundle --tar
+./scripts/build_release_bundle.sh --output ./release-output --name surf_llm_bundle --tar
 ```
 
 The bundle excludes local secrets and generated runtime output. The receiver
 must edit `bundle.env` or export environment variables for `VOICE_PYTHON`,
-`QWEN_PYTHON`, and `OPENAI_API_KEY` before running `./run.sh`.
+`LLM_PYTHON`, and `OPENAI_API_KEY` before running `./run.sh`.

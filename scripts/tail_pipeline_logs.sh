@@ -3,14 +3,14 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: tail_pipeline_logs.sh [all|core|voice|rag|qwen|audio]
+Usage: tail_pipeline_logs.sh [all|core|voice|rag|llm|audio]
 
 Groups:
   all    all integrated pipeline services
-  core   SURF voice, RAG, qwen node, qwen server, audio player
+  core   SURF voice, RAG, LLM node, LLM server, audio player
   voice  SURF voice runtime and UDP ROS bridge
   rag    Ollama and XJTLU RAG server
-  qwen   qwen server and qwen ROS context node
+  llm   LLM server and LLM ROS context node
   audio  Unitree audio player
 EOF
 }
@@ -22,33 +22,33 @@ case "${GROUP}" in
     UNITS=(
       surf-voice-runtime
       surf-ros-bridge
-      surf-qwen-ollama
-      surf-qwen-rag
-      surf-qwen-server
-      surf-qwen-node
-      surf-qwen-audio-player
+      surf-llm-ollama
+      surf-llm-rag
+      surf-llm-server
+      surf-llm-node
+      surf-llm-audio-player
     )
     ;;
   core)
     UNITS=(
       surf-voice-runtime
-      surf-qwen-rag
-      surf-qwen-server
-      surf-qwen-node
-      surf-qwen-audio-player
+      surf-llm-rag
+      surf-llm-server
+      surf-llm-node
+      surf-llm-audio-player
     )
     ;;
   voice)
     UNITS=(surf-voice-runtime surf-ros-bridge)
     ;;
   rag)
-    UNITS=(surf-qwen-ollama surf-qwen-rag)
+    UNITS=(surf-llm-ollama surf-llm-rag)
     ;;
-  qwen)
-    UNITS=(surf-qwen-server surf-qwen-node)
+  llm|qwen)
+    UNITS=(surf-llm-server surf-llm-node)
     ;;
   audio)
-    UNITS=(surf-qwen-audio-player)
+    UNITS=(surf-llm-audio-player)
     ;;
   -h|--help|help)
     usage

@@ -1,6 +1,6 @@
 # 2026-05-21 Update Log
 
-This document archives the SURF -> Qwen -> Unitree G1 pipeline changes made on
+This document archives the SURF -> LLM -> Unitree G1 pipeline changes made on
 2026-05-21.
 
 ## Voice Pipeline
@@ -52,9 +52,9 @@ This document archives the SURF -> Qwen -> Unitree G1 pipeline changes made on
   - Official name: `face wave`
   - Action ID: `25`
 - Added configuration:
-  - `SURF_QWEN_WAKE_ACK_ACTION_ENABLE=1`
-  - `SURF_QWEN_WAKE_ACK_ACTION_ID=25`
-  - `SURF_QWEN_WAKE_ACK_ACTION_LABEL=面前挥手`
+  - `SURF_LLM_WAKE_ACK_ACTION_ENABLE=1`
+  - `SURF_LLM_WAKE_ACK_ACTION_ID=25`
+  - `SURF_LLM_WAKE_ACK_ACTION_LABEL=面前挥手`
 - Wake ack action runs directly through the Unitree action runner, not through
   Qwen action classification.
 
@@ -63,14 +63,14 @@ This document archives the SURF -> Qwen -> Unitree G1 pipeline changes made on
 - Added a short acknowledgement after valid ASR is accepted:
   - Text: `收到`
 - Added configuration:
-  - `SURF_QWEN_THINKING_ACK_ENABLE=1`
-  - `SURF_QWEN_THINKING_ACK_TEXT=收到`
+  - `SURF_LLM_THINKING_ACK_ENABLE=1`
+  - `SURF_LLM_THINKING_ACK_TEXT=收到`
 - Flow is now:
 
 ```text
 wake word -> red light -> "我在" + face wave
 command ASR accepted -> blinking green + "收到"
-Qwen/RAG/DeepSeek reply ready -> formal reply playback -> blue
+LLM/RAG/DeepSeek reply ready -> formal reply playback -> blue
 ```
 
 ## Actions
@@ -159,8 +159,8 @@ Follow logs:
 
 ```bash
 journalctl --user -u surf-voice-runtime -f
-journalctl --user -u surf-qwen-node -f
-journalctl --user -u surf-qwen-audio-player -f
+journalctl --user -u surf-llm-node -f
+journalctl --user -u surf-llm-audio-player -f
 ```
 
 Check workspace:
@@ -177,7 +177,7 @@ Integrated workspace:
 ```text
 config/default.env
 project_config.py
-qwen_surf_context_node.py
+llm_surf_context_node.py
 surf_voice_runtime.py
 unitree_audio_player.py
 pipeline_log/pipeline_logger.py
@@ -208,7 +208,7 @@ README.md
 5. User speaks command.
 6. ASR accepts command.
 7. Robot blinks green and says "收到".
-8. Qwen/RAG/DeepSeek generates reply.
+8. LLM/RAG/DeepSeek generates reply.
 9. Robot plays formal reply in blue light.
 10. Robot remains blue after playback.
 ```

@@ -1,4 +1,4 @@
-# SURF Qwen Clean Workspace
+# SURF LLM Clean Workspace
 
 Integrated workspace for the SURF voice module, XJTLU RAG, TTS playback, and
 Unitree G1 action execution.
@@ -12,8 +12,8 @@ assets and local secrets, so clone-only is not enough for the full robot demo.
 ```text
 SURF voice runtime
   -> /audio_msg
-  -> qwen_surf_context_node.py
-  -> qwen_server.py
+  -> llm_surf_context_node.py
+  -> llm_server.py
   -> XJTLU RAG / Ollama embedding / DeepSeek reply + action
   -> Edge TTS wav
   -> Unitree action runner
@@ -89,7 +89,7 @@ Follow logs:
 ```bash
 ./scripts/tail_pipeline_logs.sh all
 ./scripts/tail_pipeline_logs.sh rag
-./scripts/tail_pipeline_logs.sh qwen
+./scripts/tail_pipeline_logs.sh llm
 ./scripts/tail_pipeline_logs.sh voice
 ```
 
@@ -104,7 +104,7 @@ Monitor ASR topic:
 The default configured backend is RAG:
 
 ```text
-QWEN_REPLY_BACKEND=rag
+LLM_REPLY_BACKEND=rag
 CHAT_PROVIDER=openai
 CHAT_MODEL=deepseek-v4-pro
 EMBED_PROVIDER=ollama
@@ -119,21 +119,21 @@ cp config/local.env.example config/local.env
 ```
 
 Then edit `config/local.env` for the target machine, especially
-`OPENAI_API_KEY`, `QWEN_PYTHON`, `VOICE_PYTHON`, and the Unitree network values.
+`OPENAI_API_KEY`, `LLM_PYTHON`, `VOICE_PYTHON`, and the Unitree network values.
 
 Fresh installs should use the top-level dependency files:
 
 ```bash
-python -m pip install -r requirements-qwen.txt
+python -m pip install -r requirements-llm.txt
 python -m pip install -r requirements-voice.txt
 ```
 
 Switch reply backend:
 
 ```bash
-./scripts/env_set.sh QWEN_REPLY_BACKEND rag
-./scripts/env_set.sh QWEN_REPLY_BACKEND local
-./scripts/env_set.sh QWEN_REPLY_BACKEND dashscope
+./scripts/env_set.sh LLM_REPLY_BACKEND rag
+./scripts/env_set.sh LLM_REPLY_BACKEND local
+./scripts/env_set.sh LLM_REPLY_BACKEND dashscope
 ```
 
 ## Important Paths
@@ -162,8 +162,8 @@ Expected paths in the current deployment:
 
 ```text
 SURF_ROOT=deps/SURF2026_VoiceModule-main
-QWEN_ROOT=deps/qwen_ros_node_edg_tts
-QWEN_ACTION_ROOT=deps/unitree_g1_action_classifier_package
+LLM_ROOT=deps/qwen_ros_node_edg_tts
+LLM_ACTION_ROOT=deps/unitree_g1_action_classifier_package
 OLLAMA_BIN=deps/ollama/bin/ollama
 OLLAMA_HOME=deps/ollama-home
 ```
@@ -171,7 +171,7 @@ OLLAMA_HOME=deps/ollama-home
 Python interpreters are external environment dependencies:
 
 ```text
-QWEN_PYTHON=$HOME/miniconda3/envs/qwen/bin/python
+LLM_PYTHON=$HOME/miniconda3/envs/llm/bin/python
 VOICE_PYTHON from deps/SURF2026_VoiceModule-main/config/default.env
 ```
 

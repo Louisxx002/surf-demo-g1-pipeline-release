@@ -7,7 +7,7 @@ summarizes what is tracked in Git and what must be restored locally.
 
 ```text
 deps/SURF2026_VoiceModule-main/             SURF wake/VAD/ASR/speaker module
-deps/qwen_ros_node_edg_tts/                 Unitree SDK Python subtree and legacy Qwen node files
+deps/qwen_ros_node_edg_tts/                 Unitree SDK Python subtree and legacy LLM node files
 deps/unitree_g1_action_classifier_package/  Unitree action support source and SDK files
 xjtlu-rag-system/                           RAG service, knowledge DB, and vector index DB
 ```
@@ -33,7 +33,7 @@ current machine architecture.
 ```text
 Conda environments:
   $HOME/miniconda3/envs/voice/bin/python
-  $HOME/miniconda3/envs/qwen/bin/python
+  $HOME/miniconda3/envs/llm/bin/python
 
 Large runtime assets:
   deps/ollama/

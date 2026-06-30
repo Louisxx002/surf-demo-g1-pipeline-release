@@ -7,29 +7,29 @@ voice, TTS, action classifier, and Unitree action execution pipeline.
 
 ```text
 SURF ASR /audio_msg
-  -> qwen_surf_context_node.py
-  -> qwen_server.py /infer
-  -> xjtlu-rag-system /chat when QWEN_REPLY_BACKEND=rag
+  -> llm_surf_context_node.py
+  -> llm_server.py /infer
+  -> xjtlu-rag-system /chat when LLM_REPLY_BACKEND=rag
   -> edge_tts wav generation
   -> existing action classifier and Unitree runner
 ```
 
 The GitHub RAG bridge publishes `/xjtlu_reply`, but this workspace does not use
-that topic for action execution. Instead, `qwen_server.py` calls the RAG HTTP API
+that topic for action execution. Instead, `llm_server.py` calls the RAG HTTP API
 directly so the existing action path receives the final reply unchanged.
 
 ## Enable RAG
 
 ```bash
 cd <repo-root>
-./scripts/env_set.sh QWEN_REPLY_BACKEND rag
+./scripts/env_set.sh LLM_REPLY_BACKEND rag
 ./scripts/run_pipeline.sh
 ```
 
 To switch back to the current local Qwen model:
 
 ```bash
-./scripts/env_set.sh QWEN_REPLY_BACKEND local
+./scripts/env_set.sh LLM_REPLY_BACKEND local
 ```
 
 ## Model Provider

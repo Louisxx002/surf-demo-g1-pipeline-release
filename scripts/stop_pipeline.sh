@@ -9,12 +9,12 @@ systemctl --user stop \
   qwen-server.service \
   qwen-ros-node.service \
   qwen-audio-player.service \
-  surf-qwen-ollama.service \
-  surf-qwen-rag.service \
-  surf-qwen-server.service \
-  surf-qwen-node.service \
-  surf-qwen-audio-player.service >/dev/null 2>&1 || true
+  surf-llm-ollama.service \
+  surf-llm-rag.service \
+  surf-llm-server.service \
+  surf-llm-node.service \
+  surf-llm-audio-player.service >/dev/null 2>&1 || true
 
 pkill -f 'asr_dds_to_ros_bridge.py --network' >/dev/null 2>&1 || true
 
-echo "Stopped SURF -> Qwen integrated pipeline services."
+echo "Stopped SURF -> LLM integrated pipeline services."

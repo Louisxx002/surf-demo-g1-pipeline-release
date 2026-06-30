@@ -34,17 +34,17 @@ class SurfContext:
     speaker_time: float = 0.0
 
 
-class QwenSurfContextNode(Node):
-    """Consume SURF context topics and run the qwen reply/TTS/action backend."""
+class LlmSurfContextNode(Node):
+    """Consume SURF context topics and run the LLM reply/TTS/action backend."""
 
     def __init__(self) -> None:
-        super().__init__("qwen_surf_context_node")
+        super().__init__("llm_surf_context_node")
         self.force_always_listen = CONFIG.always_listen
         self.awaiting_command_after_wake = False
         self.surf_context = SurfContext()
         self.status: dict[str, Any] = {
-            "pipeline": "surf_qwen_workspace",
-            "reply_backend": os.environ.get("QWEN_REPLY_BACKEND", "local"),
+            "pipeline": "surf_llm_workspace",
+            "reply_backend": CONFIG.reply_backend,
             "action_execute": CONFIG.action_execute,
             "action_release_after_sec": CONFIG.action_release_after_sec,
             "last_error": "",
@@ -73,23 +73,23 @@ class QwenSurfContextNode(Node):
         CONFIG.runtime_dir.mkdir(parents=True, exist_ok=True)
         self._update_status(
             service_state="ready",
-            qwen_server_url=CONFIG.qwen_server_url,
+            llm_server_url=CONFIG.llm_server_url,
             action_backend=CONFIG.action_backend,
             action_keyword_first=CONFIG.action_keyword_first,
         )
-        self.get_logger().info("Qwen SURF context node ready.")
+        self.get_logger().info("LLM SURF context node ready.")
         self.get_logger().info(f"SURF ASR topic: {CONFIG.ros_audio_topic}")
         self.get_logger().info(f"SURF wake topic: {CONFIG.surf_wake_topic}")
         self.get_logger().info(f"SURF VAD topic: {CONFIG.surf_vad_topic}")
         self.get_logger().info(f"SURF speaker topic: {CONFIG.surf_speaker_topic}")
-        self.get_logger().info(f"Qwen server: {CONFIG.qwen_server_url}")
+        self.get_logger().info(f"LLM server: {CONFIG.llm_server_url}")
         self.get_logger().info(
             "Reply action bridge: "
             f"enabled={CONFIG.action_enable}, execute={CONFIG.action_execute}, "
             f"backend={CONFIG.action_backend}, network={CONFIG.unitree_network_interface}"
         )
         self.get_logger().info(
-            "Qwen wake filter: "
+            "LLM wake filter: "
             + ("disabled; SURF wake-word gates ASR." if self.force_always_listen else "enabled as a second filter.")
         )
 
@@ -204,28 +204,28 @@ class QwenSurfContextNode(Node):
             command_text = self.strip_wake_word(user_text)
             if command_text is None:
                 if not self._consume_wake_listen_window():
-                    self.get_logger().info("Second qwen wake filter did not match; ignoring ASR text.")
+                    self.get_logger().info("Second LLM wake filter did not match; ignoring ASR text.")
                     return
                 command_text = user_text.strip()
             elif not command_text:
                 self._open_wake_listen_window()
                 self.get_logger().info(
-                    "Second qwen wake filter matched. Waiting for the next ASR command event."
+                    "Second LLM wake filter matched. Waiting for the next ASR command event."
                 )
                 return
             user_text = command_text
 
-        qwen_text = self._build_qwen_text(user_text)
+        llm_text = self._build_llm_text(user_text)
         request_session_id = self._session_id or session_id or self._fallback_session_id()
-        qwen_started_at = time.time()
+        llm_started_at = time.time()
         self._set_wake_light_green()
         self._session_record("thinking", text=user_text, session_id=request_session_id)
         self._run_thinking_action()
         self._maybe_play_thinking_ack(request_session_id)
-        qwen_response = self._request_qwen(qwen_text, session_id=request_session_id)
-        qwen_finished_at = time.time()
-        reply = str(qwen_response.get("reply", "")).strip()
-        action_payload = qwen_response.get("action", {})
+        llm_response = self._request_llm(llm_text, session_id=request_session_id)
+        llm_finished_at = time.time()
+        reply = str(llm_response.get("reply", "")).strip()
+        action_payload = llm_response.get("action", {})
         if not reply:
             self._update_status(last_error="llm_request_failed", updated_at=time.time())
             self._session_record("llm_failed", session_id=request_session_id)
@@ -234,14 +234,14 @@ class QwenSurfContextNode(Node):
             return
 
         self.get_logger().info(f"LLM reply: {reply}")
-        timing = qwen_response.get("timing", {})
+        timing = llm_response.get("timing", {})
         self._update_status(
             last_reply=reply,
-            last_reply_time=qwen_finished_at,
+            last_reply_time=llm_finished_at,
             latency={
                 **self.status.get("latency", {}),
-                "llm_ms": self._elapsed_ms(qwen_started_at, qwen_finished_at),
-                "wake_to_reply_ms": self._elapsed_ms(self.surf_context.wake_time, qwen_finished_at),
+                "llm_ms": self._elapsed_ms(llm_started_at, llm_finished_at),
+                "wake_to_reply_ms": self._elapsed_ms(self.surf_context.wake_time, llm_finished_at),
             },
         )
         self._session_record(
@@ -385,7 +385,7 @@ class QwenSurfContextNode(Node):
                 return "english_filler"
         return ""
 
-    def _build_qwen_text(self, user_text: str) -> str:
+    def _build_llm_text(self, user_text: str) -> str:
         if CONFIG.reply_backend == "rag":
             return user_text
         if not CONFIG.include_speaker_context or not self.surf_context.speaker:
@@ -401,22 +401,22 @@ class QwenSurfContextNode(Node):
         speaker = self.surf_context.speaker.strip() if self.surf_context.speaker else "default"
         return re.sub(r"[^0-9A-Za-z_\-\u4e00-\u9fff]", "_", speaker) or "default"
 
-    def _request_qwen(self, text: str, session_id: str = "default") -> dict[str, Any]:
+    def _request_llm(self, text: str, session_id: str = "default") -> dict[str, Any]:
         try:
             response = HTTP_SESSION.get(
-                CONFIG.qwen_server_url,
+                CONFIG.llm_server_url,
                 params={"text": text, "session_id": session_id},
                 timeout=CONFIG.request_timeout_sec,
             )
             response.raise_for_status()
             result = response.json()
         except Exception as exc:
-            self.get_logger().error(f"Qwen request failed: {exc}")
+            self.get_logger().error(f"LLM request failed: {exc}")
             return {}
 
         reply = str(result.get("reply", "")).strip()
         if not reply:
-            self.get_logger().error("Empty reply from Qwen")
+            self.get_logger().error("Empty reply from LLM")
         result["reply"] = reply
         return result
 
@@ -464,7 +464,7 @@ class QwenSurfContextNode(Node):
 
     def _request_tts_mp3(self, text: str) -> None:
         response = HTTP_SESSION.get(
-            self._qwen_tts_url(),
+            self._llm_tts_url(),
             params={"text": text},
             timeout=CONFIG.request_timeout_sec,
         )
@@ -542,7 +542,7 @@ class QwenSurfContextNode(Node):
         try:
             self._write_tts_play_context("wake_ack", ack_text)
             response = HTTP_SESSION.get(
-                self._qwen_tts_url(),
+                self._llm_tts_url(),
                 params={"text": ack_text},
                 timeout=CONFIG.request_timeout_sec,
             )
@@ -683,7 +683,7 @@ class QwenSurfContextNode(Node):
         try:
             subprocess.run(
                 [
-                    os.environ.get("QWEN_PYTHON", "python3"),
+                    os.environ.get("LLM_PYTHON", os.environ.get("QWEN_PYTHON", "python3")),
                     str(script),
                     CONFIG.unitree_network_interface,
                 ],
@@ -698,8 +698,8 @@ class QwenSurfContextNode(Node):
             self._action_lock.release()
 
     @staticmethod
-    def _qwen_tts_url() -> str:
-        return CONFIG.qwen_server_url.rsplit("/", 1)[0] + "/tts"
+    def _llm_tts_url() -> str:
+        return CONFIG.llm_server_url.rsplit("/", 1)[0] + "/tts"
 
     def _convert_tts_to_wav_locked(self) -> bool:
         with self._tts_lock:
@@ -707,7 +707,7 @@ class QwenSurfContextNode(Node):
 
     def _convert_tts_to_wav(self) -> bool:
         if not CONFIG.tts_mp3_path.exists():
-            self.get_logger().error(f"{CONFIG.tts_mp3_path} not found; Qwen server did not generate it")
+            self.get_logger().error(f"{CONFIG.tts_mp3_path} not found; LLM server did not generate it")
             return False
 
         try:
@@ -1176,7 +1176,7 @@ class QwenSurfContextNode(Node):
 
 def main() -> None:
     rclpy.init()
-    node = QwenSurfContextNode()
+    node = LlmSurfContextNode()
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):

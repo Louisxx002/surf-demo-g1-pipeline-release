@@ -1,6 +1,6 @@
-# SURF -> Qwen 全流程操作指南
+# SURF -> LLM 全流程操作指南
 
-本文档用于在当前工作区跑通 SURF 语音、Qwen、XJTLU RAG、TTS 播放和 Unitree 动作执行的集成流程。
+本文档用于在当前工作区跑通 SURF 语音、LLM、XJTLU RAG、TTS 播放和 Unitree 动作执行的集成流程。
 
 ## 1. 进入项目目录
 
@@ -21,7 +21,7 @@ cd <repo-root>
 正常情况下最后会看到：
 
 ```text
-SURF -> Qwen workspace check passed.
+SURF -> LLM workspace check passed.
 ```
 
 如果这里报错，先不要继续启动全流程，需要根据报错补齐缺失文件、依赖或配置。
@@ -37,7 +37,7 @@ SURF -> Qwen workspace check passed.
 正常输出：
 
 ```text
-Stopped SURF -> Qwen integrated pipeline services.
+Stopped SURF -> LLM integrated pipeline services.
 ```
 
 ## 4. 启动全流程
@@ -62,7 +62,7 @@ Stopped SURF -> Qwen integrated pipeline services.
 
 ```text
 Integrated pipeline started.
-SURF publishes /audio_msg; qwen consumes /audio_msg.
+SURF publishes /audio_msg; LLM consumes /audio_msg.
 Mode: listen
 Reply backend: rag
 ```
@@ -73,8 +73,8 @@ Reply backend: rag
 语音输入
 -> SURF voice runtime
 -> /audio_msg
--> qwen_surf_context_node.py
--> qwen_server.py
+-> llm_surf_context_node.py
+-> llm_server.py
 -> XJTLU RAG
 -> DeepSeek reply + action
 -> Edge TTS wav
@@ -101,7 +101,7 @@ cd <repo-root>
 ```bash
 ./scripts/tail_pipeline_logs.sh voice
 ./scripts/tail_pipeline_logs.sh rag
-./scripts/tail_pipeline_logs.sh qwen
+./scripts/tail_pipeline_logs.sh llm
 ```
 
 也可以直接查看 systemd 用户服务日志：
@@ -109,11 +109,11 @@ cd <repo-root>
 ```bash
 journalctl --user -u surf-voice-runtime -f
 journalctl --user -u surf-ros-bridge -f
-journalctl --user -u surf-qwen-ollama -f
-journalctl --user -u surf-qwen-rag -f
-journalctl --user -u surf-qwen-server -f
-journalctl --user -u surf-qwen-node -f
-journalctl --user -u surf-qwen-audio-player -f
+journalctl --user -u surf-llm-ollama -f
+journalctl --user -u surf-llm-rag -f
+journalctl --user -u surf-llm-server -f
+journalctl --user -u surf-llm-node -f
+journalctl --user -u surf-llm-audio-player -f
 ```
 
 ## 6. 测试语音输入
@@ -132,7 +132,7 @@ journalctl --user -u surf-qwen-audio-player -f
 ./scripts/run_pipeline.sh --mode wake
 ```
 
-需要先说唤醒词，然后再说指令。当前配置中 `SURF_QWEN_WAKE_WORDS` 为空，如果唤醒不稳定，优先使用 `--mode listen` 跑通主链路。
+需要先说唤醒词，然后再说指令。当前配置中 `SURF_LLM_WAKE_WORDS` 为空，如果唤醒不稳定，优先使用 `--mode listen` 跑通主链路。
 
 ## 7. 监听 ASR 消息
 
@@ -159,16 +159,16 @@ journalctl --user -u surf-qwen-audio-player -f
 查看：
 
 ```bash
-journalctl --user -u surf-qwen-ollama -f
-journalctl --user -u surf-qwen-rag -f
+journalctl --user -u surf-llm-ollama -f
+journalctl --user -u surf-llm-rag -f
 ```
 
-### Qwen server 不健康
+### LLM server 不健康
 
 查看：
 
 ```bash
-journalctl --user -u surf-qwen-server -f
+journalctl --user -u surf-llm-server -f
 ```
 
 也可以检查 health 接口：
@@ -182,17 +182,17 @@ curl http://127.0.0.1:8000/health
 查看音频播放器日志：
 
 ```bash
-journalctl --user -u surf-qwen-audio-player -f
+journalctl --user -u surf-llm-audio-player -f
 ```
 
-### 语音没有进入 Qwen
+### 语音没有进入 LLM
 
 依次查看：
 
 ```bash
 journalctl --user -u surf-voice-runtime -f
 journalctl --user -u surf-ros-bridge -f
-journalctl --user -u surf-qwen-node -f
+journalctl --user -u surf-llm-node -f
 ```
 
 也可以用：

@@ -34,13 +34,13 @@ The launch scripts source it before starting ROS nodes.
 
 ## Conda Environments
 
-The default config expects a main Python environment named `qwen`:
+The default config expects a main Python environment named `llm`:
 
 ```bash
-conda create -n qwen python=3.12 -y
-conda activate qwen
+conda create -n llm python=3.12 -y
+conda activate llm
 python -m pip install --upgrade pip
-python -m pip install -r requirements-qwen.txt
+python -m pip install -r requirements-llm.txt
 ```
 
 The SURF voice module may use a separate environment:
@@ -61,7 +61,7 @@ deps/unitree_g1_action_classifier_package/requirements.txt
 deps/SURF2026_VoiceModule-main/requirements.txt
 ```
 
-They now delegate to the top-level `requirements-qwen.txt` or
+They now delegate to the top-level `requirements-llm.txt` or
 `requirements-voice.txt`, so use the top-level files for fresh installs.
 
 If PyTorch needs a machine-specific CPU/CUDA build, install the matching
@@ -72,7 +72,7 @@ encode the local `+cpu` or `+cu*` build suffix.
 Set the actual paths in `config/local.env`:
 
 ```bash
-QWEN_PYTHON="${HOME}/miniconda3/envs/qwen/bin/python"
+LLM_PYTHON="${HOME}/miniconda3/envs/llm/bin/python"
 VOICE_PYTHON="${HOME}/miniconda3/envs/voice/bin/python"
 ```
 
@@ -139,7 +139,7 @@ The repo has two Unitree DDS paths:
 Install the Python SDK dependency in the main pipeline environment:
 
 ```bash
-${QWEN_PYTHON:-$HOME/miniconda3/envs/qwen/bin/python} -m pip install -e deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python
+${LLM_PYTHON:-$HOME/miniconda3/envs/llm/bin/python} -m pip install -e deps/qwen_ros_node_edg_tts/third_party/unitree_sdk2_python
 ```
 
 The Python SDK generates CycloneDDS XML at runtime and binds DDS to
@@ -159,7 +159,7 @@ Check DDS setup:
 
 ```bash
 ip -o link show "$UNITREE_NETWORK_INTERFACE"
-${QWEN_PYTHON:-$HOME/miniconda3/envs/qwen/bin/python} -c "import cyclonedds; print('cyclonedds ok')"
+${LLM_PYTHON:-$HOME/miniconda3/envs/llm/bin/python} -c "import cyclonedds; print('cyclonedds ok')"
 ldd deps/unitree_g1_action_classifier_package/unitree_sdk2/build/bin/g1_arm_action_example | rg 'ddsc|ddscxx|not found'
 ```
 
@@ -187,7 +187,7 @@ deps/unitree_g1_action_classifier_package/unitree_sdk2/build/bin/g1_arm_action_e
 Override if needed:
 
 ```bash
-QWEN_ACTION_RUNNER="/path/to/g1_arm_action_example"
+LLM_ACTION_RUNNER="/path/to/g1_arm_action_example"
 ```
 
 ## Wake-Word Model Files

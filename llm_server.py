@@ -190,6 +190,47 @@ def infer_dashscope(text, user_lang):
     return response_data["choices"][0]["message"]["content"]
 
 
+def post_deepseek_chat_completion(payload):
+    api_key = os.environ.get("LLM_DEEPSEEK_API_KEY") or os.environ.get("QWEN_DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY, LLM_DEEPSEEK_API_KEY, or QWEN_DEEPSEEK_API_KEY is not set")
+
+    endpoint = CONFIG.deepseek_base_url.rstrip("/") + "/chat/completions"
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    context = ssl.create_default_context(cafile=get_certifi_ca_file())
+    try:
+        with urllib.request.urlopen(request, timeout=CONFIG.request_timeout_sec, context=context) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"DeepSeek API HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"DeepSeek API request failed: {exc}") from exc
+
+
+def infer_deepseek(text, user_lang):
+    payload = {
+        "model": CONFIG.deepseek_model,
+        "messages": [
+            {"role": "system", "content": build_prompt(user_lang)},
+            {"role": "user", "content": text},
+        ],
+        "thinking": {"type": "disabled"},
+        "max_tokens": CONFIG.max_new_tokens,
+        "temperature": CONFIG.temperature,
+    }
+    response_data = post_deepseek_chat_completion(payload)
+    return response_data["choices"][0]["message"]["content"]
+
+
 def post_rag_chat(text, session_id):
     payload = {
         "message": text,
@@ -259,6 +300,7 @@ async def health():
         "reply_backend": CONFIG.reply_backend,
         "model_path": CONFIG.model_path,
         "dashscope_model": CONFIG.dashscope_model,
+        "deepseek_model": CONFIG.deepseek_model,
         "rag_server_url": CONFIG.rag_server_url,
         "tts_mp3": str(CONFIG.tts_mp3_path),
         "tts_wav": str(CONFIG.tts_wav_path),
@@ -271,6 +313,9 @@ async def infer(text: str, session_id: str = "default"):
     if CONFIG.reply_backend == "dashscope":
         reply = infer_dashscope(text, user_lang)
         timing = {"rag_embed_sec": 0.0, "rag_search_sec": 0.0, "llm_sec": 0.0, "total_sec": 0.0}
+    elif CONFIG.reply_backend == "deepseek":
+        reply = infer_deepseek(text, user_lang)
+        timing = {"rag_embed_sec": 0.0, "rag_search_sec": 0.0, "llm_sec": 0.0, "total_sec": 0.0}
     elif CONFIG.reply_backend == "local":
         reply = infer_local(text, user_lang)
         timing = {"rag_embed_sec": 0.0, "rag_search_sec": 0.0, "llm_sec": 0.0, "total_sec": 0.0}
@@ -280,7 +325,7 @@ async def infer(text: str, session_id: str = "default"):
         action = rag_response.get("action", {})
         timing = rag_response.get("timing", {})
     else:
-        raise RuntimeError(f"Unsupported QWEN_REPLY_BACKEND: {CONFIG.reply_backend}")
+        raise RuntimeError(f"Unsupported LLM_REPLY_BACKEND: {CONFIG.reply_backend}")
 
     reply = clean_text(reply)
     lang = detect_language(reply, preferred_lang=user_lang)

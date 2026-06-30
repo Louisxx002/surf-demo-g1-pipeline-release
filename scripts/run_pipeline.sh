@@ -8,8 +8,8 @@ set -a
 source "${WORKSPACE_ROOT}/config/default.env"
 set +a
 
-MODE="${SURF_QWEN_MODE}"
-WAKE_WORDS="${SURF_QWEN_WAKE_WORDS}"
+MODE="${SURF_LLM_MODE}"
+WAKE_WORDS="${SURF_LLM_WAKE_WORDS}"
 LOCAL_CURL_ENV=(
   env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy
   NO_PROXY=127.0.0.1,localhost
@@ -17,11 +17,11 @@ LOCAL_CURL_ENV=(
 PIPELINE_UNITS=(
   surf-ros-bridge.service
   surf-voice-runtime.service
-  surf-qwen-ollama.service
-  surf-qwen-rag.service
-  surf-qwen-server.service
-  surf-qwen-node.service
-  surf-qwen-audio-player.service
+  surf-llm-ollama.service
+  surf-llm-rag.service
+  surf-llm-server.service
+  surf-llm-node.service
+  surf-llm-audio-player.service
 )
 
 usage() {
@@ -30,11 +30,11 @@ Usage: run_pipeline.sh [--mode listen|wake] [--wake-word WORD]
 
 Starts:
   SURF voice-pipeline.service
-  qwen-server.service
-  qwen-ros-node.service with QWEN_AUTOSTART_ASR_BRIDGE=0
-  qwen-audio-player.service
+  surf-llm-server.service
+  surf-llm-node.service with LLM_AUTOSTART_ASR_BRIDGE=0
+  surf-llm-audio-player.service
 
-If QWEN_REPLY_BACKEND=rag, also starts Ollama and the XJTLU RAG server.
+If LLM_REPLY_BACKEND=rag, also starts Ollama and the XJTLU RAG server.
 EOF
 }
 
@@ -55,7 +55,7 @@ resolve_unitree_availability() {
       ;;
     *)
       export UNITREE_ENABLE=0
-      export QWEN_ACTION_EXECUTE=0
+      export LLM_ACTION_EXECUTE=0
       echo "Unitree DDS disabled by UNITREE_ENABLE=0."
       return 0
       ;;
@@ -69,7 +69,7 @@ resolve_unitree_availability() {
   echo "Unitree DDS disabled: ${UNITREE_NETWORK_INTERFACE} is not connected or not active."
   echo "Core voice/RAG/DeepSeek pipeline will still start; G1 audio, lights, and action execution are disabled."
   export UNITREE_ENABLE=0
-  export QWEN_ACTION_EXECUTE=0
+  export LLM_ACTION_EXECUTE=0
 }
 
 fail_if_unit_stopped() {
@@ -179,9 +179,9 @@ fi
 
 test -f "${WORKSPACE_ROOT}/surf_voice_runtime.py"
 test -f "${WORKSPACE_ROOT}/surf_ros_bridge.py"
-test -d "${QWEN_ROOT}/third_party/unitree_sdk2_python"
-test -f "${WORKSPACE_ROOT}/qwen_server.py"
-test -f "${WORKSPACE_ROOT}/qwen_surf_context_node.py"
+test -d "${LLM_ROOT}/third_party/unitree_sdk2_python"
+test -f "${WORKSPACE_ROOT}/llm_server.py"
+test -f "${WORKSPACE_ROOT}/llm_surf_context_node.py"
 test -f "${WORKSPACE_ROOT}/unitree_audio_player.py"
 
 set +u
@@ -199,11 +199,11 @@ systemctl --user stop \
   qwen-ros-node.service \
   qwen-audio-player.service \
   ollama.service \
-  surf-qwen-ollama.service \
-  surf-qwen-server.service \
-  surf-qwen-rag.service \
-  surf-qwen-node.service \
-  surf-qwen-audio-player.service >/dev/null 2>&1 || true
+  surf-llm-ollama.service \
+  surf-llm-server.service \
+  surf-llm-rag.service \
+  surf-llm-node.service \
+  surf-llm-audio-player.service >/dev/null 2>&1 || true
 
 for unit in "${PIPELINE_UNITS[@]}"; do
   if unit_is_running "${unit}"; then
@@ -224,62 +224,62 @@ start_unit surf-ros-bridge "${WORKSPACE_ROOT}/scripts/run_surf_ros_bridge.sh"
 
 start_unit surf-voice-runtime "${VOICE_SYSTEMD_ENV[@]}" "${WORKSPACE_ROOT}/scripts/run_surf_voice_runtime.sh"
 
-if [[ "${QWEN_REPLY_BACKEND}" == "rag" ]]; then
+if [[ "${LLM_REPLY_BACKEND}" == "rag" ]]; then
   test -f "${WORKSPACE_ROOT}/xjtlu-rag-system/app.py"
   test -f "${WORKSPACE_ROOT}/xjtlu-rag-system/rag_index.db"
   test -f "${WORKSPACE_ROOT}/xjtlu-rag-system/xjtlu_knowledge.db"
   test -x "${OLLAMA_BIN}"
 
-  start_unit surf-qwen-ollama "${WORKSPACE_ROOT}/scripts/run_ollama_server.sh"
-  wait_http_health "Ollama" "${OLLAMA_BASE_URL}/api/tags" surf-qwen-ollama.service
+  start_unit surf-llm-ollama "${WORKSPACE_ROOT}/scripts/run_ollama_server.sh"
+  wait_http_health "Ollama" "${OLLAMA_BASE_URL}/api/tags" surf-llm-ollama.service
 
-  start_unit surf-qwen-rag "${WORKSPACE_ROOT}/scripts/run_rag_server.sh"
-  wait_http_health "XJTLU RAG server" "http://${RAG_SERVER_HOST}:${RAG_SERVER_PORT}/health" surf-qwen-rag.service
+  start_unit surf-llm-rag "${WORKSPACE_ROOT}/scripts/run_rag_server.sh"
+  wait_http_health "XJTLU RAG server" "http://${RAG_SERVER_HOST}:${RAG_SERVER_PORT}/health" surf-llm-rag.service
 fi
 
-export QWEN_AUTOSTART_ASR_BRIDGE=0
-export QWEN_ALWAYS_LISTEN=1
+export LLM_AUTOSTART_ASR_BRIDGE=0
+export LLM_ALWAYS_LISTEN=1
 if [[ "${MODE}" == "wake" ]]; then
-  export QWEN_ALWAYS_LISTEN=0
+  export LLM_ALWAYS_LISTEN=0
 fi
 if [[ -n "${WAKE_WORDS}" ]]; then
-  export QWEN_WAKE_WORDS="${WAKE_WORDS}"
+  export LLM_WAKE_WORDS="${WAKE_WORDS}"
 fi
 
 SYSTEMD_ENV=(
-  --setenv=QWEN_AUTOSTART_ASR_BRIDGE=0
-  --setenv=QWEN_ALWAYS_LISTEN="${QWEN_ALWAYS_LISTEN}"
+  --setenv=LLM_AUTOSTART_ASR_BRIDGE=0
+  --setenv=LLM_ALWAYS_LISTEN="${LLM_ALWAYS_LISTEN}"
   --setenv=UNITREE_DOMAIN_ID="${UNITREE_DOMAIN_ID}"
   --setenv=UNITREE_ENABLE="${UNITREE_ENABLE}"
   --setenv=UNITREE_NETWORK_INTERFACE="${UNITREE_NETWORK_INTERFACE}"
-  --setenv=QWEN_ACTION_EXECUTE="${QWEN_ACTION_EXECUTE}"
-  --setenv=PYTHONPATH="${WORKSPACE_ROOT}:${QWEN_ROOT}/third_party/unitree_sdk2_python:${PYTHONPATH:-}"
+  --setenv=LLM_ACTION_EXECUTE="${LLM_ACTION_EXECUTE}"
+  --setenv=PYTHONPATH="${WORKSPACE_ROOT}:${LLM_ROOT}/third_party/unitree_sdk2_python:${PYTHONPATH:-}"
 )
 if [[ -n "${WAKE_WORDS}" ]]; then
-  SYSTEMD_ENV+=(--setenv=QWEN_WAKE_WORDS="${WAKE_WORDS}")
+  SYSTEMD_ENV+=(--setenv=LLM_WAKE_WORDS="${WAKE_WORDS}")
 fi
 
-start_unit surf-qwen-server "${SYSTEMD_ENV[@]}" "${WORKSPACE_ROOT}/scripts/run_qwen_server.sh"
-wait_http_health "Qwen server" "http://127.0.0.1:${QWEN_SERVER_PORT}/health" surf-qwen-server.service
+start_unit surf-llm-server "${SYSTEMD_ENV[@]}" "${WORKSPACE_ROOT}/scripts/run_llm_server.sh"
+wait_http_health "LLM server" "http://127.0.0.1:${LLM_SERVER_PORT}/health" surf-llm-server.service
 
-start_unit surf-qwen-node "${SYSTEMD_ENV[@]}" "${WORKSPACE_ROOT}/scripts/run_surf_context_node.sh"
+start_unit surf-llm-node "${SYSTEMD_ENV[@]}" "${WORKSPACE_ROOT}/scripts/run_surf_context_node.sh"
 
-start_unit surf-qwen-audio-player "${SYSTEMD_ENV[@]}" "${WORKSPACE_ROOT}/scripts/run_audio_player.sh"
-wait_unit_running surf-qwen-audio-player.service
+start_unit surf-llm-audio-player "${SYSTEMD_ENV[@]}" "${WORKSPACE_ROOT}/scripts/run_audio_player.sh"
+wait_unit_running surf-llm-audio-player.service
 
 echo "Integrated pipeline started."
-echo "SURF publishes /audio_msg; qwen consumes /audio_msg."
+echo "SURF publishes /audio_msg; LLM consumes /audio_msg."
 echo "Mode: ${MODE}"
-echo "Reply backend: ${QWEN_REPLY_BACKEND}"
+echo "Reply backend: ${LLM_REPLY_BACKEND}"
 if [[ -n "${WAKE_WORDS}" ]]; then
   echo "Wake words: ${WAKE_WORDS}"
 fi
-echo "Qwen DDS ASR bridge: disabled"
+echo "LLM DDS ASR bridge: disabled"
 echo "Logs:"
 echo "  journalctl --user -u surf-voice-runtime -f"
 echo "  journalctl --user -u surf-ros-bridge -f"
-echo "  journalctl --user -u surf-qwen-ollama -f"
-echo "  journalctl --user -u surf-qwen-rag -f"
-echo "  journalctl --user -u surf-qwen-node -f"
-echo "  journalctl --user -u surf-qwen-server -f"
-echo "  journalctl --user -u surf-qwen-audio-player -f"
+echo "  journalctl --user -u surf-llm-ollama -f"
+echo "  journalctl --user -u surf-llm-rag -f"
+echo "  journalctl --user -u surf-llm-node -f"
+echo "  journalctl --user -u surf-llm-server -f"
+echo "  journalctl --user -u surf-llm-audio-player -f"

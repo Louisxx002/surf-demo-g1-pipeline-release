@@ -1,7 +1,7 @@
-# Main pipeline environment (`qwen`).
+# Main pipeline environment (`llm`).
 #
 # Install from the repository root:
-#   python -m pip install -r requirements-qwen.txt
+#   python -m pip install -r requirements-llm.txt
 #
 # ROS2 Python packages such as rclpy/std_msgs are provided by ROS2 Jazzy and are
 # not installable from this requirements file.
