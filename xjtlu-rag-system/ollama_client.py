@@ -15,6 +15,8 @@ def strip_reasoning_text(text: str) -> str:
         text,
     )
     text = re.sub(r"(?is)^\s*(?:最终答案|最终回复|answer|final)\s*[:：]\s*", "", text)
+    text = re.sub(r"（[^（）]{1,24}）", "", text)
+    text = re.sub(r"\([^()]{1,24}\)", "", text)
     return text.strip()
 
 
