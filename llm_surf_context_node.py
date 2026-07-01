@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -60,15 +63,23 @@ class LlmSurfContextNode(Node):
         self._wake_listen_until = 0.0
         self._wake_listen_generation = 0
         self._wake_command_started = False
+        self._wake_ack_guard_until = 0.0
+        self._followup_until = 0.0
+        self._followup_generation = 0
+        self._conversation_session_id = ""
         self._pipeline_lock = threading.Lock()
         self._pipeline_logger = PipelineLogger()
         self._session_log: SessionLog | None = None
         self._session_id = ""
+        self._standby_ack_event_mtime = 0.0
+        self._standby_ack_event_updated_at = 0.0
 
         self.create_subscription(String, CONFIG.ros_audio_topic, self.on_audio_msg, 10)
         self.create_subscription(String, CONFIG.surf_wake_topic, self.on_wake, 10)
         self.create_subscription(Bool, CONFIG.surf_vad_topic, self.on_vad, 10)
         self.create_subscription(String, CONFIG.surf_speaker_topic, self.on_speaker, 10)
+        self.create_timer(0.2, self._poll_wake_listen_timeout)
+        self.create_timer(0.3, self._poll_standby_ack_event)
 
         CONFIG.runtime_dir.mkdir(parents=True, exist_ok=True)
         self._update_status(
@@ -76,6 +87,14 @@ class LlmSurfContextNode(Node):
             llm_server_url=CONFIG.llm_server_url,
             action_backend=CONFIG.action_backend,
             action_keyword_first=CONFIG.action_keyword_first,
+            followup_enable=CONFIG.followup_enable,
+            followup_timeout_sec=CONFIG.followup_timeout_sec,
+            followup_control_file=str(CONFIG.followup_control_path),
+            standby_ack_enable=CONFIG.standby_ack_enable,
+            standby_ack_event_file=str(CONFIG.standby_ack_event_path),
+            robot_skill_enable=CONFIG.robot_skill_enable,
+            robot_skill_execute=CONFIG.robot_skill_execute,
+            robot_skill_runner=str(CONFIG.robot_skill_runner),
         )
         self.get_logger().info("LLM SURF context node ready.")
         self.get_logger().info(f"SURF ASR topic: {CONFIG.ros_audio_topic}")
@@ -97,6 +116,7 @@ class LlmSurfContextNode(Node):
         payload = self._decode_json_payload(msg.data)
         wake_word = str(payload.get("word", msg.data)).strip()
         session_id = str(payload.get("session_id", "")).strip()
+        self._close_followup_window("new_wake")
         self._attach_session(session_id or None)
         self.surf_context.wake_word = wake_word
         self.surf_context.wake_time = time.time()
@@ -104,8 +124,13 @@ class LlmSurfContextNode(Node):
         self._update_status(last_wake=wake_word, last_wake_time=self.surf_context.wake_time)
         self._session_record("wake_received", wake_word=wake_word, session_id=self._session_id)
         self.get_logger().info(f"SURF wake detected: {wake_word} session={self._session_id}")
+        self.get_logger().info("on_wake no longer establishes conversation_session_id")
         self._open_wake_listen_window()
         self._maybe_play_wake_ack(wake_word)
+        self._wake_ack_guard_until = time.monotonic() + max(0.0, CONFIG.wake_ack_guard_sec)
+        self.get_logger().info(
+            f"wake_ack guard armed until={self._wake_ack_guard_until:.3f} sec={CONFIG.wake_ack_guard_sec:.2f}"
+        )
 
     def on_vad(self, msg: Bool) -> None:
         self.surf_context.vad_is_speech = bool(msg.data)
@@ -158,10 +183,13 @@ class LlmSurfContextNode(Node):
             self.surf_context.speaker_time = time.time()
 
         if not user_text:
+            was_waiting_for_wake_command = self._wake_listen_waiting()
             if session_id:
                 self._attach_session(session_id)
             self._close_wake_listen_window("empty_asr")
             self._set_wake_light_blue()
+            if was_waiting_for_wake_command:
+                self._play_standby_ack(session_id or self._session_id or self._fallback_session_id(), "wake_no_command")
             return
 
         self._attach_session(session_id or None)
@@ -174,6 +202,7 @@ class LlmSurfContextNode(Node):
 
         ignore_reason = self._asr_ignore_reason(user_text, confidence)
         if ignore_reason:
+            was_waiting_for_wake_command = self._wake_listen_waiting()
             self.get_logger().warn(f"Ignoring ASR text: reason={ignore_reason}, text={user_text}")
             self._update_status(
                 last_ignored_asr=user_text,
@@ -183,6 +212,48 @@ class LlmSurfContextNode(Node):
             )
             self._close_wake_listen_window(f"ignored_asr:{ignore_reason}")
             self._set_wake_light_blue()
+            if was_waiting_for_wake_command:
+                self._play_standby_ack(self._session_id or session_id or self._fallback_session_id(), "wake_no_command")
+            return
+
+        first_turn_guard_reason = self._first_turn_wake_ack_guard_reason(user_text)
+        if first_turn_guard_reason:
+            self.get_logger().info(
+                f"wake_ack guard active; ignoring ASR text={user_text} reason={first_turn_guard_reason}"
+            )
+            self._update_status(
+                last_ignored_asr=user_text,
+                last_ignored_asr_reason=f"wake_ack_guard:{first_turn_guard_reason}",
+                updated_at=time.time(),
+            )
+            self._session_record(
+                "wake_ack_guard_ignored",
+                text=user_text,
+                reason=first_turn_guard_reason,
+                session_id=self._session_id,
+            )
+            return
+
+        self_speech, self_speech_reason = self._self_speech_asr_match(user_text)
+        if self_speech:
+            was_waiting_for_wake_command = self._wake_listen_waiting()
+            followup_active = self._is_conversation_followup_session(session_id)
+            self.get_logger().info(f"ignored self-speech ASR reason={self_speech_reason} text={user_text}")
+            self._update_status(
+                last_ignored_asr=user_text,
+                last_ignored_asr_reason=f"self_speech:{self_speech_reason}",
+                updated_at=time.time(),
+            )
+            self._session_record(
+                "self_speech_asr_ignored",
+                text=user_text,
+                reason=self_speech_reason,
+                session_id=self._session_id,
+            )
+            if was_waiting_for_wake_command and not followup_active:
+                self._close_wake_listen_window("self_speech_asr")
+                self._set_wake_light_blue()
+                self._play_standby_ack(self._session_id or session_id or self._fallback_session_id(), "wake_no_command")
             return
 
         self.get_logger().info(
@@ -200,13 +271,75 @@ class LlmSurfContextNode(Node):
             },
         )
 
+        followup_turn = False
         if not self.force_always_listen:
             command_text = self.strip_wake_word(user_text)
-            if command_text is None:
-                if not self._consume_wake_listen_window():
-                    self.get_logger().info("Second LLM wake filter did not match; ignoring ASR text.")
+            terminate_text = command_text if command_text is not None else user_text
+            if self._is_terminate_command(user_text) or self._is_terminate_command(terminate_text):
+                request_session_id = (
+                    self._conversation_session_id
+                    or self._session_id
+                    or session_id
+                    or self._fallback_session_id()
+                )
+                self.get_logger().info(
+                    f"terminate command matched raw={user_text} command_text={terminate_text} "
+                    f"normalized={self._normalize_command_text(terminate_text)}"
+                )
+                self._handle_terminate_command(request_session_id)
+                return
+            skill_text = terminate_text if command_text is not None else user_text
+            skill_context_allowed = (
+                command_text is not None
+                or self._is_conversation_followup_session(session_id)
+                or self._wake_listen_waiting()
+            )
+            if skill_context_allowed:
+                skill = self._detect_robot_skill_command(skill_text)
+                if skill:
+                    request_session_id = (
+                        self._conversation_session_id
+                        or self._session_id
+                        or session_id
+                        or self._fallback_session_id()
+                    )
+                    self._handle_robot_skill_command(skill, request_session_id)
                     return
-                command_text = user_text.strip()
+            if command_text is None:
+                if self._is_conversation_followup_session(session_id):
+                    followup_turn = True
+                    command_text = user_text.strip()
+                else:
+                    if CONFIG.first_turn_strict_gate_enable and not self._conversation_session_id and self._wake_listen_waiting():
+                        invalid, reason = self._is_invalid_first_turn_command(user_text)
+                        normalized = self._normalize_first_turn_text(user_text)
+                        if invalid:
+                            self.get_logger().info(
+                                f"ignored invalid first-turn command text={user_text} normalized={normalized} "
+                                f"reason={reason} min_chars={CONFIG.first_turn_min_chars} "
+                                f"require_intent={CONFIG.first_turn_require_intent}"
+                            )
+                            self._update_status(
+                                last_ignored_asr=user_text,
+                                last_ignored_asr_reason=f"first_turn:{reason}",
+                                updated_at=time.time(),
+                            )
+                            self._session_record(
+                                "first_turn_command_ignored",
+                                text=user_text,
+                                normalized=normalized,
+                                reason=reason,
+                                session_id=session_id or self._session_id or "default",
+                            )
+                            return
+                        valid_reason = self._first_turn_valid_reason(user_text)
+                        self.get_logger().info(
+                            f"valid first-turn command text={user_text} normalized={normalized} reason={valid_reason}"
+                        )
+                    if not self._consume_wake_listen_window():
+                        self.get_logger().info("Second LLM wake filter did not match; ignoring ASR text.")
+                        return
+                    command_text = user_text.strip()
             elif not command_text:
                 self._open_wake_listen_window()
                 self.get_logger().info(
@@ -214,15 +347,45 @@ class LlmSurfContextNode(Node):
                 )
                 return
             user_text = command_text
+        else:
+            skill = self._detect_robot_skill_command(user_text)
+            if skill:
+                request_session_id = self._conversation_session_id or self._session_id or session_id or self._fallback_session_id()
+                self._handle_robot_skill_command(skill, request_session_id)
+                return
 
         llm_text = self._build_llm_text(user_text)
-        request_session_id = self._session_id or session_id or self._fallback_session_id()
+        if followup_turn and self._conversation_session_id:
+            request_session_id = self._conversation_session_id
+        else:
+            request_session_id = self._conversation_session_id or self._session_id or session_id or self._fallback_session_id()
+        if self._is_terminate_command(user_text):
+            self.get_logger().info(
+                f"terminate command matched raw={user_text} command_text={user_text} "
+                f"normalized={self._normalize_command_text(user_text)}"
+            )
+            self._handle_terminate_command(request_session_id)
+            return
+        if not self._conversation_session_id:
+            self._conversation_session_id = request_session_id
+            self.get_logger().info(
+                f"conversation_session_id established after valid user request session_id={request_session_id}"
+            )
         llm_started_at = time.time()
         self._set_wake_light_green()
         self._session_record("thinking", text=user_text, session_id=request_session_id)
         self._run_thinking_action()
-        self._maybe_play_thinking_ack(request_session_id)
-        llm_response = self._request_llm(llm_text, session_id=request_session_id)
+        skip_thinking_ack = self._should_skip_thinking_ack_for_action(user_text)
+        if skip_thinking_ack:
+            pass
+        else:
+            queued_thinking_ack = self._maybe_play_thinking_ack(request_session_id)
+            if queued_thinking_ack and CONFIG.thinking_ack_play_gap_sec > 0:
+                self.get_logger().info(
+                    f"thinking_ack play gap sleep={CONFIG.thinking_ack_play_gap_sec:.2f}s"
+                )
+                time.sleep(CONFIG.thinking_ack_play_gap_sec)
+        llm_response = self._request_llm(llm_text, session_id=request_session_id, user_text=user_text)
         llm_finished_at = time.time()
         reply = str(llm_response.get("reply", "")).strip()
         action_payload = llm_response.get("action", {})
@@ -253,7 +416,8 @@ class LlmSurfContextNode(Node):
 
         tts_started_at = time.time()
         try:
-            tts_ok = self._prepare_tts_wav("reply", reply, session_id=request_session_id)
+            reply_tts_text = self._build_reply_tts_text(reply)
+            tts_ok = self._prepare_tts_wav("reply", reply_tts_text, session_id=request_session_id)
         except Exception as exc:
             self.get_logger().warn(f"Reply TTS request failed: {exc}")
             tts_ok = False
@@ -303,16 +467,29 @@ class LlmSurfContextNode(Node):
         return None
 
     def _open_wake_listen_window(self) -> None:
+        timeout_sec = max(0.1, CONFIG.wake_listen_sec)
         with self._wake_state_lock:
             self.awaiting_command_after_wake = True
-            self._wake_listen_until = 0.0
+            self._wake_listen_until = time.monotonic() + timeout_sec
             self._wake_listen_generation += 1
             self._wake_command_started = False
+            generation = self._wake_listen_generation
+            wake_listen_until = self._wake_listen_until
+            session_id = self._session_id
 
         self._update_status(
             wake_listen_active=True,
-            wake_listen_until=None,
-            wake_listen_sec=None,
+            wake_listen_until=time.time() + timeout_sec,
+            wake_listen_sec=timeout_sec,
+        )
+        self._session_record(
+            "wake_listen_open",
+            session_id=session_id,
+            generation=generation,
+            timeout_sec=timeout_sec,
+        )
+        self.get_logger().info(
+            f"wake listen window opened session_id={session_id} until={wake_listen_until:.3f} sec={timeout_sec:.2f}"
         )
         threading.Thread(target=self._set_wake_light_red, daemon=True).start()
 
@@ -329,9 +506,39 @@ class LlmSurfContextNode(Node):
         self._session_record("wake_listen_closed", reason=close_reason, session_id=self._session_id)
         return True
 
-    def _expire_wake_listen_window(self, generation: int) -> None:
-        """Legacy timeout hook kept unused; wake state is now closed by events."""
-        return
+    def _poll_wake_listen_timeout(self) -> None:
+        with self._wake_state_lock:
+            if not self.awaiting_command_after_wake:
+                return
+            if self._wake_listen_until <= 0.0:
+                return
+            if time.monotonic() < self._wake_listen_until:
+                return
+        self._expire_wake_listen_window("timeout")
+
+    def _expire_wake_listen_window(self, reason: str = "timeout") -> None:
+        session_id = ""
+        with self._wake_state_lock:
+            if not self.awaiting_command_after_wake:
+                return
+            if self._conversation_session_id:
+                return
+            session_id = self._session_id or self._fallback_session_id()
+            self.awaiting_command_after_wake = False
+            self._wake_listen_until = 0.0
+            self._wake_command_started = False
+
+        self._update_status(
+            wake_listen_active=False,
+            last_wake_listen_closed_reason=reason,
+            last_wake_listen_closed_time=time.time(),
+        )
+        self._session_record("wake_listen_closed", reason=reason, session_id=session_id)
+        self.get_logger().info(f"wake listen window timeout session_id={session_id}")
+        self.get_logger().info(f"wake listen window closed reason={reason}")
+        self._set_wake_light_blue()
+        if reason == "timeout":
+            self._play_standby_ack(session_id, "wake_listen_timeout")
 
     def _mark_wake_command_started(self) -> None:
         should_record = False
@@ -356,6 +563,504 @@ class LlmSurfContextNode(Node):
 
         self._update_status(wake_listen_active=False, last_wake_listen_closed_reason=reason)
         self._session_record("wake_listen_closed", reason=reason, session_id=self._session_id)
+
+    def _wake_listen_waiting(self) -> bool:
+        with self._wake_state_lock:
+            return bool(self.awaiting_command_after_wake or self._wake_listen_until > 0)
+
+    def _open_followup_window(self, session_id: str, reason: str) -> None:
+        if not CONFIG.followup_enable or CONFIG.followup_timeout_sec <= 0:
+            return
+        with self._wake_state_lock:
+            self._conversation_session_id = session_id
+            self._followup_until = time.monotonic() + CONFIG.followup_timeout_sec
+            self._followup_generation += 1
+            generation = self._followup_generation
+
+        self._update_status(
+            followup_active=True,
+            followup_session_id=session_id,
+            followup_timeout_sec=CONFIG.followup_timeout_sec,
+            followup_until=time.time() + CONFIG.followup_timeout_sec,
+            followup_reason=reason,
+        )
+        self._session_record(
+            "followup_open",
+            session_id=session_id,
+            timeout_sec=CONFIG.followup_timeout_sec,
+            reason=reason,
+        )
+        threading.Thread(target=self._expire_followup_window, args=(generation,), daemon=True).start()
+
+    def _followup_active(self) -> bool:
+        if not CONFIG.followup_enable:
+            return False
+        with self._wake_state_lock:
+            if not self._conversation_session_id or not self._followup_until:
+                return False
+            active = time.monotonic() <= self._followup_until
+        if active:
+            return True
+        self._close_followup_window("timeout")
+        return False
+
+    def _is_conversation_followup_session(self, session_id: str) -> bool:
+        if not CONFIG.followup_enable:
+            return False
+        session_id = (session_id or "").strip()
+        if not session_id:
+            return False
+        with self._wake_state_lock:
+            return bool(self._conversation_session_id) and session_id == self._conversation_session_id
+
+    def _expire_followup_window(self, generation: int) -> None:
+        timeout_sec = max(0.0, CONFIG.followup_timeout_sec)
+        time.sleep(timeout_sec)
+        with self._wake_state_lock:
+            if generation != self._followup_generation:
+                return
+            if not self._conversation_session_id or time.monotonic() <= self._followup_until:
+                return
+        self._close_followup_window("timeout")
+        self._set_wake_light_blue()
+
+    def _close_followup_window(self, reason: str) -> None:
+        with self._wake_state_lock:
+            if not self._conversation_session_id and not self._followup_until:
+                return
+            session_id = self._conversation_session_id
+            self._conversation_session_id = ""
+            self._followup_until = 0.0
+            self._followup_generation += 1
+
+        self._update_status(
+            followup_active=False,
+            followup_session_id=session_id,
+            last_followup_closed_reason=reason,
+            last_followup_closed_time=time.time(),
+        )
+        self._session_record("followup_closed", reason=reason, session_id=session_id or self._session_id)
+
+    def _normalize_command_text(self, text: str) -> str:
+        return re.sub(r"[\s，。！？、,.!?;:：；'\"“”‘’\-()（）\[\]{}]", "", text or "")
+
+    def _is_terminate_command(self, text: str) -> bool:
+        if not CONFIG.terminate_command_enable:
+            return False
+        normalized = self._normalize_command_text(text)
+        if not normalized:
+            return False
+        for command in CONFIG.terminate_commands:
+            if normalized == self._normalize_command_text(command):
+                return True
+        return False
+
+    def _handle_terminate_command(self, session_id: str) -> None:
+        self.get_logger().info("terminate command received; closing interaction")
+        with self._wake_state_lock:
+            self._conversation_session_id = ""
+            self._followup_until = 0.0
+            self._followup_generation += 1
+            self.awaiting_command_after_wake = False
+            self._wake_listen_until = 0.0
+            self._wake_command_started = False
+
+        self._update_status(
+            followup_active=False,
+            followup_session_id="",
+            wake_listen_active=False,
+            last_followup_closed_reason="terminate_command",
+            last_wake_listen_closed_reason="terminate_command",
+            last_terminate_command_time=time.time(),
+        )
+        self._session_record("terminate_command", session_id=session_id)
+        self._write_followup_control_close(session_id, "terminate_command")
+        self._set_wake_light_blue()
+
+        ack_text = CONFIG.terminate_ack_text.strip()
+        if not ack_text:
+            return
+        try:
+            self._prepare_tts_wav("system_ack", ack_text, session_id=session_id)
+        except Exception as exc:
+            self.get_logger().warn(f"Terminate ack TTS request failed: {exc}")
+            self._session_record("terminate_ack_failed", reason=str(exc), session_id=session_id)
+
+    def _write_followup_control_close(self, session_id: str, reason: str) -> None:
+        try:
+            CONFIG.followup_control_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "command": "close",
+                "session_id": session_id,
+                "reason": reason,
+                "updated_at": time.time(),
+            }
+            CONFIG.followup_control_path.write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            self.get_logger().info(f"followup_control close written: reason={reason}")
+        except Exception as exc:
+            self.get_logger().warn(f"Follow-up control close write failed: {exc}")
+
+    def _poll_standby_ack_event(self) -> None:
+        path = CONFIG.standby_ack_event_path
+        if not path.exists():
+            return
+        try:
+            mtime = path.stat().st_mtime
+        except OSError as exc:
+            self.get_logger().warn(f"Standby ack event stat failed: {exc}")
+            return
+        if mtime == self._standby_ack_event_mtime:
+            return
+        self._standby_ack_event_mtime = mtime
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self.get_logger().warn(f"Standby ack event parse failed: {exc}")
+            return
+
+        if str(payload.get("event", "")).strip() != "standby_ack":
+            return
+        try:
+            updated_at = float(payload.get("updated_at", 0.0))
+        except (TypeError, ValueError):
+            updated_at = 0.0
+        if updated_at <= self._standby_ack_event_updated_at:
+            return
+        self._standby_ack_event_updated_at = updated_at
+
+        reason = str(payload.get("reason", "")).strip() or "unknown"
+        if reason != "followup_timeout":
+            self.get_logger().info(f"Ignoring standby ack event reason={reason}")
+            return
+        session_id = str(payload.get("session_id", "")).strip() or self._fallback_session_id()
+        self._clear_conversation_after_real_followup_timeout(session_id)
+        self._play_standby_ack(session_id, reason)
+
+    def _clear_conversation_after_real_followup_timeout(self, session_id: str) -> None:
+        with self._wake_state_lock:
+            if session_id and self._conversation_session_id and session_id != self._conversation_session_id:
+                return
+            self._conversation_session_id = ""
+            self._followup_until = 0.0
+            self._followup_generation += 1
+            self.awaiting_command_after_wake = False
+            self._wake_listen_until = 0.0
+            self._wake_command_started = False
+
+        self._update_status(
+            followup_active=False,
+            followup_session_id=session_id,
+            wake_listen_active=False,
+            last_followup_closed_reason="followup_timeout",
+            last_followup_closed_time=time.time(),
+        )
+        self._session_record("followup_closed", reason="followup_timeout", session_id=session_id or self._session_id)
+        self.get_logger().info(
+            f"conversation_session_id cleared after real followup timeout session_id={session_id}"
+        )
+
+    def _play_standby_ack(self, session_id: str, reason: str) -> None:
+        if not CONFIG.standby_ack_enable:
+            return
+        ack_text = CONFIG.standby_ack_text.strip()
+        if not ack_text:
+            return
+        try:
+            tts_ok = self._prepare_tts_wav("system_ack", ack_text, session_id=session_id)
+        except Exception as exc:
+            self.get_logger().warn(f"Standby ack TTS request failed: {exc}")
+            self._session_record("standby_ack_failed", reason=reason, error=str(exc), session_id=session_id)
+            return
+        if not tts_ok:
+            self._session_record("standby_ack_failed", reason=reason, error="wav_failed", session_id=session_id)
+            return
+        self.get_logger().info(f"standby ack queued reason={reason}")
+        self._session_record("standby_ack_ready", text=ack_text, reason=reason, session_id=session_id)
+
+    def _normalize_asr_text(self, text: str) -> str:
+        normalized = (text or "").lower()
+        return re.sub(r"[\s，。！？、,.!?;:：；'\"“”‘’\-()（）\[\]{}]", "", normalized)
+
+    def _normalize_first_turn_text(self, text: str) -> str:
+        return self._normalize_asr_text(text)
+
+    def _has_first_turn_intent(self, text: str) -> bool:
+        normalized = self._normalize_first_turn_text(text)
+        keywords = (
+            "介绍",
+            "讲",
+            "说",
+            "告诉",
+            "帮我",
+            "带我",
+            "了解",
+            "哪里",
+            "在哪",
+            "什么",
+            "哪些",
+            "多少",
+            "怎么",
+            "为什么",
+            "能不能",
+            "可以不",
+            "专业",
+            "学校",
+            "校区",
+            "学院",
+            "课程",
+            "申请",
+            "学费",
+            "宿舍",
+            "食堂",
+            "图书馆",
+            "西交",
+            "西郊",
+            "西浦",
+            "利物浦",
+            "大学",
+        )
+        return any(self._normalize_first_turn_text(keyword) in normalized for keyword in keywords)
+
+    def _looks_like_first_turn_noise(self, text: str) -> bool:
+        normalized = self._normalize_first_turn_text(text)
+        if not normalized:
+            return False
+        if self._is_terminate_command(normalized):
+            return False
+        if self._detect_robot_skill_command(normalized):
+            return False
+        action_like, _, _ = self._looks_like_action_request(normalized)
+        if action_like:
+            return False
+        if self._has_first_turn_intent(normalized):
+            return False
+
+        noisy_prefixes = (
+            "我在",
+            "存在",
+            "准在",
+            "不意",
+            "不意思",
+            "嗯",
+            "啊",
+            "呃",
+            "哦",
+            "好",
+            "好的",
+            "你好",
+            "小浦",
+        )
+        if normalized.startswith(noisy_prefixes):
+            return True
+
+        if len(normalized) <= 8:
+            return True
+
+        if len(normalized) <= 10:
+            unique_ratio = len(set(normalized)) / max(1, len(normalized))
+            if unique_ratio <= 0.55:
+                return True
+
+        return False
+
+    def _is_invalid_first_turn_command(self, text: str) -> tuple[bool, str]:
+        normalized = self._normalize_first_turn_text(text)
+        if not normalized:
+            return True, "empty"
+        if self._is_terminate_command(text):
+            return False, "terminate_command"
+        if self._detect_robot_skill_command(text):
+            return False, "robot_skill"
+        action_like, _, _ = self._looks_like_action_request(text)
+        if action_like:
+            return False, "action_intent"
+
+        noise_texts = {self._normalize_first_turn_text(item) for item in CONFIG.first_turn_noise_texts}
+        if normalized in noise_texts:
+            return True, "noise_text"
+
+        if len(normalized) < max(1, CONFIG.first_turn_min_chars):
+            return True, "too_short"
+
+        if self._looks_like_first_turn_noise(normalized):
+            return True, "noise_like"
+
+        if CONFIG.first_turn_require_intent and not self._has_first_turn_intent(text):
+            return True, "no_intent"
+
+        return False, ""
+
+    def _first_turn_valid_reason(self, text: str) -> str:
+        if self._is_terminate_command(text):
+            return "terminate_command"
+        skill = self._detect_robot_skill_command(text)
+        if skill:
+            return f"robot_skill:{skill.get('command', '')}"
+        action_like, _, keyword = self._looks_like_action_request(text)
+        if action_like:
+            return f"action_intent:{keyword}"
+        if self._has_first_turn_intent(text):
+            return "question_intent"
+        return "accepted"
+
+    def _first_turn_wake_ack_guard_reason(self, user_text: str) -> str:
+        if not self._wake_listen_waiting():
+            return ""
+        normalized = self._normalize_asr_text(user_text)
+        if not normalized:
+            return ""
+
+        guard_reason = ""
+        try:
+            guard = self._read_tts_guard()
+        except Exception:
+            guard = {}
+        now = time.time()
+        try:
+            guard_until = float(guard.get("guard_until", 0.0))
+        except (TypeError, ValueError):
+            guard_until = 0.0
+        try:
+            guard_updated_at = float(guard.get("updated_at", 0.0))
+        except (TypeError, ValueError):
+            guard_updated_at = 0.0
+        guard_kind = str(guard.get("kind", "")).strip()
+        wake_ack_guard_active = (
+            guard_kind == "wake_ack"
+            and (bool(guard.get("active", False)) or now < guard_until + max(0.0, CONFIG.wake_ack_guard_sec))
+        )
+        if not wake_ack_guard_active:
+            return ""
+
+        blocked = {
+            "我在",
+            "我",
+            "在",
+            "嗯",
+            "啊",
+            "呃",
+            "哦",
+            "好",
+            "好的",
+            "你好",
+            "小浦",
+            "你好小浦",
+        }
+        if normalized in {self._normalize_asr_text(item) for item in blocked}:
+            return "filler"
+
+        wake_word_like = {
+            self._normalize_asr_text(item)
+            for item in CONFIG.wake_words
+        }
+        if normalized in wake_word_like and (now - guard_updated_at < max(0.0, CONFIG.wake_ack_guard_sec) + 1.0):
+            return "wake_word_echo"
+
+        if len(normalized) <= 2 and normalized in {"我", "在", "好", "嗯", "啊", "哦"}:
+            return "short_filler"
+
+        return ""
+
+    def _read_tts_guard(self) -> dict[str, Any]:
+        if not CONFIG.tts_guard_enable or not CONFIG.tts_guard_path.exists():
+            return {}
+        try:
+            payload = json.loads(CONFIG.tts_guard_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self.get_logger().warn(f"TTS guard read failed: {exc}")
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _char_coverage(self, asr: str, tts: str) -> float:
+        if not asr:
+            return 0.0
+        common = sum((Counter(asr) & Counter(tts)).values())
+        return common / max(1, len(asr))
+
+    def _self_speech_asr_match(self, user_text: str) -> tuple[bool, str]:
+        if not CONFIG.tts_guard_enable:
+            return False, ""
+        normalized_asr = self._normalize_asr_text(user_text)
+        if not normalized_asr:
+            return False, ""
+
+        guard = self._read_tts_guard()
+        now = time.time()
+        try:
+            guard_until = float(guard.get("guard_until", 0.0))
+        except (TypeError, ValueError):
+            guard_until = 0.0
+        try:
+            guard_updated_at = float(guard.get("updated_at", 0.0))
+        except (TypeError, ValueError):
+            guard_updated_at = 0.0
+        high_risk_window = (
+            bool(guard.get("active", False))
+            or now < guard_until + 3.0
+            or (guard_updated_at > 0.0 and now - guard_updated_at < 10.0)
+        )
+        guard_kind = str(guard.get("kind", "")).strip()
+        guard_text = str(guard.get("text", ""))
+        normalized_tts = self._normalize_asr_text(guard_text)
+
+        fixed_phrases = (
+            "我在",
+            "我",
+            "在",
+            "嗯",
+            "啊",
+            "呃",
+            "哦",
+            "好",
+            "好的",
+            "你好",
+            "小浦",
+            "你好小浦",
+            "小浦思考中",
+            "还有什么想问的吗",
+            "待机",
+            "好的已关闭交互",
+        )
+        for phrase in fixed_phrases:
+            normalized_phrase = self._normalize_asr_text(phrase)
+            if normalized_asr == normalized_phrase:
+                return True, f"fixed_phrase:{phrase}"
+
+        followup_prompt = self._normalize_asr_text(CONFIG.followup_prompt_text)
+        if followup_prompt and followup_prompt in normalized_asr and (high_risk_window or guard_kind == "reply"):
+            return True, "reply_followup_prompt_echo"
+
+        if not normalized_tts:
+            return False, ""
+        matcher = difflib.SequenceMatcher(None, normalized_asr, normalized_tts)
+        ratio = matcher.ratio()
+        longest = matcher.find_longest_match(
+            0,
+            len(normalized_asr),
+            0,
+            len(normalized_tts),
+        ).size
+        longest_ratio = longest / max(1, len(normalized_asr))
+        coverage = self._char_coverage(normalized_asr, normalized_tts)
+        if high_risk_window and ratio >= CONFIG.self_speech_similarity_threshold:
+            return True, f"similar_to_tts:{guard_kind}:ratio={ratio:.2f}"
+        if high_risk_window and len(normalized_asr) >= 6 and normalized_asr in normalized_tts:
+            return True, f"tts_substring_echo:{guard_kind}:ratio={ratio:.2f}"
+        if high_risk_window and len(normalized_tts) >= 6 and normalized_tts in normalized_asr:
+            return True, f"tts_contains_echo:{guard_kind}:ratio={ratio:.2f}"
+        if high_risk_window and guard_kind == "reply" and len(normalized_asr) >= 8 and coverage >= 0.75:
+            return True, f"tts_coverage_echo:{guard_kind}:coverage={coverage:.2f}:ratio={ratio:.2f}"
+        if high_risk_window and guard_kind == "reply" and len(normalized_asr) >= 8 and longest_ratio >= 0.65:
+            return True, f"tts_longest_match_echo:{guard_kind}:longest_ratio={longest_ratio:.2f}:ratio={ratio:.2f}"
+        return False, ""
+
+    def _is_self_speech_asr(self, user_text: str) -> bool:
+        matched, _ = self._self_speech_asr_match(user_text)
+        return matched
 
     @staticmethod
     def _elapsed_ms(start: float, end: float) -> int | None:
@@ -397,15 +1102,246 @@ class LlmSurfContextNode(Node):
             f"\n用户说：{user_text}"
         )
 
+    def _build_reply_tts_text(self, reply: str) -> str:
+        if not CONFIG.followup_enable or not CONFIG.followup_prompt_enable:
+            return reply
+        prompt = CONFIG.followup_prompt_text.strip()
+        if not prompt:
+            return reply
+        return f"{reply} {prompt}".strip()
+
+    def _normalize_robot_skill_text(self, text: str) -> str:
+        normalized = (text or "").lower()
+        return re.sub(r"[\s，。！？、,.!?;:：；'\"“”‘’\-()（）\[\]{}]", "", normalized)
+
+    def _detect_robot_skill_command(self, text: str) -> dict[str, str] | None:
+        if not CONFIG.robot_skill_enable:
+            return None
+        normalized = self._normalize_robot_skill_text(text)
+        if not normalized:
+            return None
+
+        command_keywords: tuple[tuple[str, tuple[str, ...]], ...] = (
+            ("stop", ("停下", "停止", "别动", "不要动", "原地站好")),
+            ("forward_step", ("向前一步", "往前一步", "前进一步", "往前走一步", "向前走一步")),
+            ("backward_step", ("后退一步", "往后退一步", "向后退一步", "退后一步")),
+            ("turn_left", ("左转一点", "向左转", "往左转", "左转一下")),
+            ("turn_right", ("右转一点", "向右转", "往右转", "右转一下")),
+            ("squat", ("下蹲", "蹲下", "蹲一下")),
+            ("lie_down", ("躺下", "趴下", "倒下")),
+            ("stand_up", ("站起来", "起立", "站好")),
+            ("sing", ("唱歌", "唱首歌", "唱一首歌", "给我唱歌")),
+        )
+        for command, keywords in command_keywords:
+            for keyword in keywords:
+                normalized_keyword = self._normalize_robot_skill_text(keyword)
+                if normalized_keyword and normalized_keyword in normalized:
+                    return {
+                        "command": command,
+                        "text": text,
+                        "normalized": normalized,
+                        "matched": keyword,
+                    }
+        return None
+
+    def _robot_skill_ack_text(self, command: str) -> str:
+        if command == "stop":
+            return "已停止"
+        return "好的"
+
+    def _handle_robot_skill_command(self, skill: dict[str, str], session_id: str) -> None:
+        command_name = skill.get("command", "").strip()
+        normalized = skill.get("normalized", "")
+        text = skill.get("text", "")
+        matched = skill.get("matched", "")
+        if not command_name:
+            return
+
+        self.get_logger().info(
+            f"robot skill command matched text={text} normalized={normalized} "
+            f"command={command_name} matched={matched}"
+        )
+        self._session_record(
+            "robot_skill_matched",
+            text=text,
+            normalized=normalized,
+            command=command_name,
+            matched=matched,
+            session_id=session_id,
+        )
+        if self._wake_listen_waiting():
+            self._consume_wake_listen_window()
+        if not self._conversation_session_id:
+            self._conversation_session_id = session_id
+            self.get_logger().info(
+                f"conversation_session_id established after robot skill command session_id={session_id}"
+            )
+        self._set_wake_light_blue()
+
+        runner_ok = self._run_robot_skill_runner(command_name, session_id)
+        ack_text = self._robot_skill_ack_text(command_name)
+        if CONFIG.robot_skill_ack_enable and ack_text:
+            try:
+                tts_ok = self._prepare_tts_wav("reply", ack_text, session_id=session_id)
+            except Exception as exc:
+                self.get_logger().warn(f"Robot skill ack TTS request failed: {exc}")
+                tts_ok = False
+            if not tts_ok:
+                self._session_record(
+                    "robot_skill_ack_failed",
+                    command=command_name,
+                    session_id=session_id,
+                )
+
+        self._update_status(
+            last_robot_skill_command=command_name,
+            last_robot_skill_text=text,
+            last_robot_skill_ok=runner_ok,
+            last_robot_skill_time=time.time(),
+        )
+
+    def _run_robot_skill_runner(self, command_name: str, session_id: str) -> bool:
+        runner = CONFIG.robot_skill_runner
+        if not runner.exists():
+            self.get_logger().warn(f"robot skill failed command={command_name} error=runner_not_found path={runner}")
+            self._session_record(
+                "robot_skill_failed",
+                command=command_name,
+                reason="runner_not_found",
+                runner=str(runner),
+                session_id=session_id,
+            )
+            return False
+
+        cmd = [
+            sys.executable,
+            str(runner),
+            "--command",
+            command_name,
+            "--network_interface",
+            CONFIG.unitree_network_interface,
+            "--execute",
+            "1" if CONFIG.robot_skill_execute else "0",
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+        except Exception as exc:
+            self.get_logger().warn(f"robot skill failed command={command_name} error={exc}")
+            self._session_record(
+                "robot_skill_failed",
+                command=command_name,
+                error=str(exc),
+                session_id=session_id,
+            )
+            return False
+
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+        for line in stdout.splitlines():
+            self.get_logger().info(line)
+        for line in stderr.splitlines():
+            self.get_logger().warn(line)
+        if result.returncode != 0:
+            self.get_logger().warn(
+                f"robot skill failed command={command_name} returncode={result.returncode}"
+            )
+            self._session_record(
+                "robot_skill_failed",
+                command=command_name,
+                returncode=result.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                session_id=session_id,
+            )
+            return False
+
+        self.get_logger().info(
+            f"robot skill executed command={command_name} execute={CONFIG.robot_skill_execute}"
+        )
+        self._session_record(
+            "robot_skill_executed",
+            command=command_name,
+            execute=CONFIG.robot_skill_execute,
+            stdout=stdout,
+            session_id=session_id,
+        )
+        return True
+
+    def _normalize_action_intent_text(self, text: str) -> str:
+        normalized = (text or "").lower()
+        return re.sub(r"[\s，。！？、,.!?;:：；'\"“”‘’()（）\[\]{}]", "", normalized)
+
+    def _looks_like_action_request(self, text: str) -> tuple[bool, str, str]:
+        normalized = self._normalize_action_intent_text(text)
+        keywords = (
+            "挥手",
+            "挥个手",
+            "打招呼",
+            "打个招呼",
+            "招呼一下",
+            "握手",
+            "握个手",
+            "鼓掌",
+            "鼓个掌",
+            "击掌",
+            "比心",
+            "比个心",
+            "拥抱",
+            "飞吻",
+            "举手",
+            "举个手",
+            "抬手",
+            "摆手",
+            "摆个手",
+            "跳舞",
+            "跳个舞",
+            "拒绝",
+            "释放手臂",
+            "放下手",
+            "动作",
+            "做个动作",
+            "做一个动作",
+            "来个动作",
+            "表演一下",
+            "欢迎一下",
+            "示意一下",
+            "xray",
+            "x-ray",
+            "x光",
+        )
+        for keyword in keywords:
+            normalized_keyword = self._normalize_action_intent_text(keyword)
+            if normalized_keyword and normalized_keyword in normalized:
+                return True, normalized, keyword
+        return False, normalized, ""
+
+    def _should_skip_thinking_ack_for_action(self, user_text: str) -> bool:
+        if not CONFIG.thinking_ack_skip_action_intent:
+            return False
+        matched, normalized, keyword = self._looks_like_action_request(user_text)
+        if not matched:
+            return False
+        self.get_logger().info(
+            f"thinking_ack skipped: action-like user request text={user_text} "
+            f"normalized={normalized} matched={keyword}"
+        )
+        return True
+
     def _fallback_session_id(self) -> str:
         speaker = self.surf_context.speaker.strip() if self.surf_context.speaker else "default"
         return re.sub(r"[^0-9A-Za-z_\-\u4e00-\u9fff]", "_", speaker) or "default"
 
-    def _request_llm(self, text: str, session_id: str = "default") -> dict[str, Any]:
+    def _request_llm(self, text: str, session_id: str = "default", user_text: str = "") -> dict[str, Any]:
         try:
             response = HTTP_SESSION.get(
                 CONFIG.llm_server_url,
-                params={"text": text, "session_id": session_id},
+                params={"text": text, "session_id": session_id, "user_text": user_text},
                 timeout=CONFIG.request_timeout_sec,
             )
             response.raise_for_status()
@@ -508,26 +1444,26 @@ class LlmSurfContextNode(Node):
         self.get_logger().info(f"Wake light command queued: {color_name}.")
         self._update_status(last_wake_light=color_name, last_wake_light_time=time.time())
 
-    def _maybe_play_thinking_ack(self, session_id: str) -> None:
+    def _maybe_play_thinking_ack(self, session_id: str) -> bool:
         if not CONFIG.thinking_ack_enable:
-            return
+            return False
         ack_text = CONFIG.thinking_ack_text.strip()
         if not ack_text:
-            return
-        self._play_thinking_ack(ack_text, session_id)
+            return False
+        return self._play_thinking_ack(ack_text, session_id)
 
-    def _play_thinking_ack(self, ack_text: str, session_id: str) -> None:
+    def _play_thinking_ack(self, ack_text: str, session_id: str) -> bool:
         started_at = time.time()
         try:
             tts_ok = self._prepare_tts_wav("thinking_ack", ack_text, session_id=session_id)
         except Exception as exc:
             self.get_logger().warn(f"Thinking ack TTS request failed: {exc}")
             self._session_record("thinking_ack_failed", text=ack_text, reason=str(exc), session_id=session_id)
-            return
+            return False
 
         if not tts_ok:
             self._session_record("thinking_ack_failed", text=ack_text, reason="wav_failed", session_id=session_id)
-            return
+            return False
 
         self.get_logger().info(f"Thinking ack played: {ack_text}")
         self._session_record(
@@ -536,6 +1472,7 @@ class LlmSurfContextNode(Node):
             session_id=session_id,
             duration_ms=self._elapsed_ms(started_at, time.time()),
         )
+        return True
 
     def _play_wake_ack(self, ack_text: str) -> None:
         started_at = time.time()

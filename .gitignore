@@ -24,6 +24,9 @@ release-output/
 
 # Local chat memory
 xjtlu-rag-system/chat_memory.db
+*.db
+*.sqlite
+*.sqlite3
 xjtlu-rag-system/__pycache__/
 
 # Bundled/generated heavyweight dependencies

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -105,10 +105,44 @@ class ProjectConfig:
     wake_ack_action_enable: bool = _env_bool_compat("SURF_LLM_WAKE_ACK_ACTION_ENABLE", "SURF_QWEN_WAKE_ACK_ACTION_ENABLE", True)
     wake_ack_action_id: int = _env_int_compat("SURF_LLM_WAKE_ACK_ACTION_ID", "SURF_QWEN_WAKE_ACK_ACTION_ID", 25)
     wake_ack_action_label: str = _env_compat("SURF_LLM_WAKE_ACK_ACTION_LABEL", "SURF_QWEN_WAKE_ACK_ACTION_LABEL", "面前挥手")
+    wake_ack_guard_sec: float = _env_float("LLM_WAKE_ACK_GUARD_SEC", 0.8)
+    first_turn_strict_gate_enable: bool = _env_bool("LLM_FIRST_TURN_STRICT_GATE_ENABLE", True)
+    first_turn_min_chars: int = _env_int("LLM_FIRST_TURN_MIN_CHARS", 2)
+    first_turn_require_intent: bool = _env_bool("LLM_FIRST_TURN_REQUIRE_INTENT", False)
+    first_turn_noise_texts: tuple[str, ...] = field(
+        default_factory=lambda: _env_list(
+            "LLM_FIRST_TURN_NOISE_TEXTS",
+            ("我在", "我", "在", "嗯", "啊", "呃", "哦", "好", "好的", "你好", "小浦", "你好小浦", "存在", "准在"),
+        )
+    )
     thinking_ack_enable: bool = _env_bool_compat("SURF_LLM_THINKING_ACK_ENABLE", "SURF_QWEN_THINKING_ACK_ENABLE", True)
-    thinking_ack_text: str = _env_compat("SURF_LLM_THINKING_ACK_TEXT", "SURF_QWEN_THINKING_ACK_TEXT", "收到，我在思考")
+    thinking_ack_text: str = _env_compat("SURF_LLM_THINKING_ACK_TEXT", "SURF_QWEN_THINKING_ACK_TEXT", "小浦思考中")
+    thinking_ack_skip_action_intent: bool = _env_bool("LLM_THINKING_ACK_SKIP_ACTION_INTENT", True)
+    thinking_ack_play_gap_sec: float = _env_float("LLM_THINKING_ACK_PLAY_GAP_SEC", 0.6)
     thinking_action_enable: bool = _env_bool_compat("SURF_LLM_THINKING_ACTION_ENABLE", "SURF_QWEN_THINKING_ACTION_ENABLE", False)
     wake_listen_sec: float = _env_float_compat("SURF_LLM_WAKE_LISTEN_SEC", "SURF_QWEN_WAKE_LISTEN_SEC", 8.0)
+    followup_enable: bool = _env_bool("LLM_FOLLOWUP_ENABLE", True)
+    followup_timeout_sec: float = _env_float("LLM_FOLLOWUP_TIMEOUT_SEC", 8.0)
+    followup_prompt_enable: bool = _env_bool("LLM_FOLLOWUP_PROMPT_ENABLE", True)
+    followup_prompt_text: str = _env("LLM_FOLLOWUP_PROMPT_TEXT", "还有什么想问的吗？")
+    reply_brief_enable: bool = _env_bool("LLM_REPLY_BRIEF_ENABLE", True)
+    reply_max_chinese_chars: int = _env_int("LLM_REPLY_MAX_CHINESE_CHARS", 80)
+    reply_brief_style: str = _env(
+        "LLM_REPLY_BRIEF_STYLE",
+        "默认简短回答，1-2句话；用户明确要求详细、展开、具体介绍、多讲一点时再适当展开。",
+    )
+    terminate_command_enable: bool = _env_bool("LLM_TERMINATE_COMMAND_ENABLE", True)
+    terminate_commands: tuple[str, ...] = _env_list(
+        "LLM_TERMINATE_COMMANDS",
+        ("关闭交互", "结束交互", "退出交互"),
+    )
+    terminate_ack_text: str = _env("LLM_TERMINATE_ACK_TEXT", "好的，已关闭交互")
+    standby_ack_enable: bool = _env_bool("LLM_STANDBY_ACK_ENABLE", True)
+    standby_ack_text: str = _env("LLM_STANDBY_ACK_TEXT", "待机")
+    tts_guard_enable: bool = _env_bool("LLM_TTS_GUARD_ENABLE", True)
+    tts_guard_grace_sec: float = _env_float("LLM_TTS_GUARD_GRACE_SEC", 0.0)
+    tts_playback_end_buffer_sec: float = _env_float("LLM_TTS_PLAYBACK_END_BUFFER_SEC", 0.3)
+    self_speech_similarity_threshold: float = _env_float("LLM_SELF_SPEECH_SIMILARITY_THRESHOLD", 0.72)
 
     model_path: str = _env_compat("LLM_MODEL_PATH", "QWEN_MODEL_PATH", str(DEPS_ROOT / "Qwen3.5-0.8B" / "model"))
     reply_backend: str = _env_compat("LLM_REPLY_BACKEND", "QWEN_REPLY_BACKEND", "local")
@@ -126,6 +160,17 @@ class ProjectConfig:
     unitree_enable: bool = _env_bool("UNITREE_ENABLE", True)
     unitree_network_interface: str = _env("UNITREE_NETWORK_INTERFACE", "enp8s0")
     unitree_audio_volume: int = _env_int("UNITREE_AUDIO_VOLUME", 85)
+
+    robot_skill_enable: bool = _env_bool("LLM_ROBOT_SKILL_ENABLE", True)
+    robot_skill_execute: bool = _env_bool("LLM_ROBOT_SKILL_EXECUTE", False)
+    robot_skill_runner: Path = Path(
+        _env("LLM_ROBOT_SKILL_RUNNER", str(PROJECT_ROOT / "scripts" / "g1_robot_skill_command.py"))
+    )
+    robot_skill_ack_enable: bool = _env_bool("LLM_ROBOT_SKILL_ACK_ENABLE", True)
+    locomotion_max_vx: float = _env_float("LLM_LOCOMOTION_MAX_VX", 0.2)
+    locomotion_max_vy: float = _env_float("LLM_LOCOMOTION_MAX_VY", 0.1)
+    locomotion_max_yaw: float = _env_float("LLM_LOCOMOTION_MAX_YAW", 0.4)
+    locomotion_max_duration_sec: float = _env_float("LLM_LOCOMOTION_MAX_DURATION_SEC", 0.8)
 
     action_enable: bool = _env_bool_compat("LLM_ACTION_ENABLE", "QWEN_ACTION_ENABLE", True)
     action_execute: bool = _env_bool_compat("LLM_ACTION_EXECUTE", "QWEN_ACTION_EXECUTE", True)
@@ -165,6 +210,18 @@ class ProjectConfig:
     @property
     def wake_light_command_path(self) -> Path:
         return self.runtime_dir / "wake_light_command.json"
+
+    @property
+    def followup_control_path(self) -> Path:
+        return Path(_env("LLM_FOLLOWUP_CONTROL_FILE", str(self.runtime_dir / "followup_control.json")))
+
+    @property
+    def standby_ack_event_path(self) -> Path:
+        return Path(_env("LLM_STANDBY_ACK_EVENT_FILE", str(self.runtime_dir / "standby_ack_event.json")))
+
+    @property
+    def tts_guard_path(self) -> Path:
+        return Path(_env("LLM_TTS_GUARD_FILE", str(self.runtime_dir / "tts_guard.json")))
 
     @property
     def tts_play_context_path(self) -> Path:
