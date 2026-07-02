@@ -33,6 +33,10 @@ sys.path.insert(0, SDK_PATH)
 
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize  # noqa: E402
 from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient  # noqa: E402
+from unitree_sdk2py.g1.arm.g1_arm_action_client import G1ArmActionClient, action_map  # noqa: E402
+
+
+ACTION_ID_TO_NAME = {action_id: name for name, action_id in action_map.items()}
 
 
 class JetsonRobotRelay:
@@ -44,6 +48,10 @@ class JetsonRobotRelay:
         self.audio.Init()
         code, volume = self.audio.GetVolume()
         print(f"[relay] AudioClient ready code={code} vol={volume}", flush=True)
+        self.arm_action = G1ArmActionClient()
+        self.arm_action.SetTimeout(TIMEOUT)
+        self.arm_action.Init()
+        print("[relay] G1ArmActionClient ready", flush=True)
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         command = str(request.get("command", ""))
@@ -82,6 +90,25 @@ class JetsonRobotRelay:
                     sample_rate=sample_rate,
                     num_channels=num_channels,
                     chunks=chunks,
+                )
+            if command == "arm_action":
+                action_id = int(request.get("id", -1))
+                action_name = ACTION_ID_TO_NAME.get(action_id)
+                if action_name is None:
+                    return self._error(command, started, f"unknown action id: {action_id}")
+                release_after_sec = float(request.get("release_after_sec", 0.0))
+                ret = self.arm_action.ExecuteAction(action_id)
+                release_ret = None
+                if ret == 0 and release_after_sec > 0 and action_id != action_map["release arm"]:
+                    time.sleep(release_after_sec)
+                    release_ret = self.arm_action.ExecuteAction(action_map["release arm"])
+                return self._ok(
+                    command,
+                    started,
+                    ret=ret,
+                    action_id=action_id,
+                    action_name=action_name,
+                    release_ret=release_ret,
                 )
             return self._error(command, started, f"unknown command: {command}")
         except Exception as exc:

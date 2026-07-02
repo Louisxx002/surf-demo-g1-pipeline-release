@@ -19,3 +19,13 @@ def test_g1_arm_action_runner_is_non_interactive():
 
     assert "input(" not in source
     assert "ACTION_ID_TO_NAME" in source
+
+
+def test_g1_arm_action_runner_supports_relay_backend():
+    source = (Path(__file__).resolve().parents[1] / "scripts" / "g1_arm_action_runner.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'os.environ.get("UNITREE_BACKEND", "direct")' in source
+    assert "RobotRelayClient" in source
+    assert "client.run_arm_action(args.id" in source

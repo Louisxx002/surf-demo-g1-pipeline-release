@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize
-from unitree_sdk2py.g1.arm.g1_arm_action_client import G1ArmActionClient, action_map
+from unitree_sdk2py.g1.arm.g1_arm_action_client import action_map
 
 
 ACTION_ID_TO_NAME = {action_id: name for name, action_id in action_map.items()}
@@ -40,6 +40,12 @@ def main() -> int:
         print(f"g1_arm_action failed: unknown action id={args.id}", file=sys.stderr)
         return 2
 
+    if os.environ.get("UNITREE_BACKEND", "direct").strip().lower() == "relay":
+        return _run_via_relay(args, action_name)
+
+    from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+    from unitree_sdk2py.g1.arm.g1_arm_action_client import G1ArmActionClient
+
     print(f"g1_arm_action start network={args.network} id={args.id} name={action_name}", flush=True)
     ChannelFactoryInitialize(0, args.network)
     client = G1ArmActionClient()
@@ -60,6 +66,29 @@ def main() -> int:
             return 4
 
     return 0
+
+
+def _run_via_relay(args: argparse.Namespace, action_name: str) -> int:
+    from robot_relay.robot_relay_client import RobotRelayClient, RobotRelayError
+
+    host = os.environ.get("ROBOT_RELAY_HOST", "192.168.123.164")
+    port = int(os.environ.get("ROBOT_RELAY_PORT", "9999"))
+    timeout = float(os.environ.get("ROBOT_RELAY_TIMEOUT_SEC", str(args.timeout)))
+    client = RobotRelayClient(host, port, timeout_sec=timeout)
+
+    print(
+        f"g1_arm_action relay start endpoint={host}:{port} id={args.id} name={action_name}",
+        flush=True,
+    )
+    try:
+        response = client.run_arm_action(args.id, release_after_sec=args.release_after_sec)
+    except RobotRelayError as exc:
+        print(f"g1_arm_action relay failed: {exc}", file=sys.stderr, flush=True)
+        return 3
+
+    ret = int(response.get("ret", -1))
+    print(f"g1_arm_action relay response={response}", flush=True)
+    return 0 if ret == 0 else 4
 
 
 if __name__ == "__main__":

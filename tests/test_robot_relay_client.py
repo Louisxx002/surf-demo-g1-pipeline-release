@@ -106,3 +106,18 @@ def test_play_wav_sends_file_bytes_as_base64(monkeypatch, tmp_path):
         "wav_b64": base64.b64encode(wav_bytes).decode("ascii"),
     }
     assert response["ret"] == 0
+
+
+def test_run_arm_action_sends_action_id(monkeypatch):
+    fake = FakeSocket(b'{"ok":true,"command":"arm_action","ret":0,"action_id":25}\n')
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: fake)
+
+    client = RobotRelayClient("robot.local", 9999)
+    response = client.run_arm_action(25, release_after_sec=0.5)
+
+    assert json.loads(fake.sent.decode("utf-8")) == {
+        "command": "arm_action",
+        "id": 25,
+        "release_after_sec": 0.5,
+    }
+    assert response["ret"] == 0

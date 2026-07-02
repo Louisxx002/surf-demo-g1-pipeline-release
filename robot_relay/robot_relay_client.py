@@ -55,6 +55,15 @@ class RobotRelayClient:
             }
         )
 
+    def run_arm_action(self, action_id: int, release_after_sec: float = 0.0) -> dict[str, Any]:
+        return self.request(
+            {
+                "command": "arm_action",
+                "id": int(action_id),
+                "release_after_sec": float(release_after_sec),
+            }
+        )
+
     def request(self, payload: dict[str, Any]) -> dict[str, Any]:
         command = str(payload.get("command", "unknown"))
         try:
