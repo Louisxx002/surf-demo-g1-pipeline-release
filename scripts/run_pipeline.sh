@@ -61,6 +61,11 @@ resolve_unitree_availability() {
       ;;
   esac
 
+  if [[ "${UNITREE_BACKEND:-direct}" == "relay" ]]; then
+    export UNITREE_ENABLE=1
+    return 0
+  fi
+
   if ip -o link show "${UNITREE_NETWORK_INTERFACE}" 2>/dev/null | grep -q "LOWER_UP"; then
     export UNITREE_ENABLE=1
     return 0
@@ -255,6 +260,10 @@ SYSTEMD_ENV=(
   --setenv=UNITREE_DOMAIN_ID="${UNITREE_DOMAIN_ID}"
   --setenv=UNITREE_ENABLE="${UNITREE_ENABLE}"
   --setenv=UNITREE_NETWORK_INTERFACE="${UNITREE_NETWORK_INTERFACE}"
+  --setenv=UNITREE_BACKEND="${UNITREE_BACKEND}"
+  --setenv=ROBOT_RELAY_HOST="${ROBOT_RELAY_HOST}"
+  --setenv=ROBOT_RELAY_PORT="${ROBOT_RELAY_PORT}"
+  --setenv=ROBOT_RELAY_TIMEOUT_SEC="${ROBOT_RELAY_TIMEOUT_SEC}"
   --setenv=LLM_ACTION_EXECUTE="${LLM_ACTION_EXECUTE}"
   --setenv=LLM_FOLLOWUP_ENABLE="${LLM_FOLLOWUP_ENABLE}"
   --setenv=LLM_FOLLOWUP_TIMEOUT_SEC="${LLM_FOLLOWUP_TIMEOUT_SEC}"

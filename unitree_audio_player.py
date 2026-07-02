@@ -1,5 +1,3 @@
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize
-from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
 from wav import read_wav, play_pcm_stream
 from collections import deque
 import hashlib
@@ -19,6 +17,70 @@ _light_state = {"color": "idle", "red": 0, "green": 0, "blue": 0, "effect": "sol
 NON_REPLY_KINDS = ("wake_ack", "thinking_ack", "system_ack")
 played_ids = deque(maxlen=20)
 played_id_set = set()
+
+
+class DirectUnitreeBackend:
+    def __init__(self) -> None:
+        from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+        from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
+
+        ChannelFactoryInitialize(CONFIG.unitree_domain_id, CONFIG.unitree_network_interface)
+        self.audio_client = AudioClient()
+        self.audio_client.SetTimeout(10.0)
+        self.audio_client.Init()
+        self.audio_client.SetVolume(CONFIG.unitree_audio_volume)
+
+    def led_control(self, red: int, green: int, blue: int) -> object:
+        return self.audio_client.LedControl(red, green, blue)
+
+    def play(self, wav_path: Path, text: str, stream_name: str = "tts") -> bool:
+        pcm_list, _sample_rate, _num_channels, is_ok = read_wav(str(wav_path))
+        if not is_ok:
+            return False
+        play_pcm_stream(self.audio_client, pcm_list, stream_name)
+        return True
+
+
+class RelayUnitreeBackend:
+    def __init__(self) -> None:
+        from robot_relay.robot_relay_client import RobotRelayClient
+
+        self.client = RobotRelayClient(
+            CONFIG.robot_relay_host,
+            CONFIG.robot_relay_port,
+            timeout_sec=CONFIG.robot_relay_timeout_sec,
+        )
+        response = self.client.health()
+        print(f"Robot relay health ok: {response}", flush=True)
+
+    def led_control(self, red: int, green: int, blue: int) -> object:
+        response = self.client.set_light(red, green, blue)
+        return response.get("ret", 0)
+
+    def play(self, wav_path: Path, text: str, stream_name: str = "tts") -> bool:
+        if not text.strip():
+            print(f"relay playback skipped: no text context for {wav_path}", flush=True)
+            return False
+        response = self.client.say_text(text)
+        print(f"relay played text stream={stream_name}: {response}", flush=True)
+        return True
+
+
+def _create_backend():
+    backend = CONFIG.unitree_backend.strip().lower()
+    if backend == "relay":
+        print(
+            f"Unitree Audio Player using relay backend {CONFIG.robot_relay_host}:{CONFIG.robot_relay_port}",
+            flush=True,
+        )
+        return RelayUnitreeBackend()
+    if backend == "direct":
+        print(
+            f"Unitree Audio Player using direct backend if={CONFIG.unitree_network_interface} domain={CONFIG.unitree_domain_id}",
+            flush=True,
+        )
+        return DirectUnitreeBackend()
+    raise ValueError(f"unsupported UNITREE_BACKEND={CONFIG.unitree_backend!r}; expected direct or relay")
 
 
 def _remember_play_id(play_id: str) -> None:
@@ -114,7 +176,7 @@ def _write_tts_guard(
 def _set_light(color: str, red: int, green: int, blue: int, effect: str = "solid") -> None:
     with _light_lock:
         _light_state.update({"color": color, "red": red, "green": green, "blue": blue, "effect": effect})
-    ret = audio_client.LedControl(red, green, blue)
+    ret = audio_backend.led_control(red, green, blue)
     print(f"wake light {color}: rgb=({red},{green},{blue}) effect={effect} ret={ret}", flush=True)
 
 
@@ -129,9 +191,9 @@ def _refresh_light_loop() -> None:
         if color != "idle":
             try:
                 if effect == "blink" and int(time.monotonic() * 2) % 2:
-                    audio_client.LedControl(0, 0, 0)
+                    audio_backend.led_control(0, 0, 0)
                 else:
-                    audio_client.LedControl(red, green, blue)
+                    audio_backend.led_control(red, green, blue)
             except Exception as exc:
                 print(f"wake light refresh failed: {exc}", flush=True)
         time.sleep(0.5)
@@ -141,12 +203,7 @@ if not CONFIG.unitree_enable:
     while True:
         time.sleep(3600)
 
-ChannelFactoryInitialize(CONFIG.unitree_domain_id, CONFIG.unitree_network_interface)
-
-audio_client = AudioClient()
-audio_client.SetTimeout(10.0)
-audio_client.Init()
-audio_client.SetVolume(CONFIG.unitree_audio_volume)
+audio_backend = _create_backend()
 
 threading.Thread(target=_refresh_light_loop, daemon=True).start()
 
@@ -241,34 +298,34 @@ while True:
                     _set_light("blue", 0, 0, 255)
                     print("reply playback started -> blue", flush=True)
 
-            pcm_list, sample_rate, num_channels, is_ok = read_wav(str(CONFIG.tts_wav_path))
-
-            if is_ok:
-                _write_tts_guard(True, play_kind, play_text, play_session_id)
-                try:
-                    play_pcm_stream(audio_client, pcm_list, "tts")
+            _write_tts_guard(True, play_kind, play_text, play_session_id)
+            try:
+                played = audio_backend.play(CONFIG.tts_wav_path, play_text, "tts")
+                if played:
                     print("played audio", flush=True)
-                finally:
-                    remaining = safe_audio_end_at - time.time()
-                    if remaining > 0:
-                        print(f"waiting for estimated audio end remaining={remaining:.2f}s", flush=True)
-                        time.sleep(remaining)
-                    ended_at = time.time()
-                    guard_until = ended_at + CONFIG.tts_guard_grace_sec
-                    _write_tts_guard(
-                        False,
-                        play_kind,
-                        play_text,
-                        play_session_id,
-                        extra_fields={
-                            "ended_at": ended_at,
-                            "wav_duration_sec": wav_duration_sec,
-                            "estimated_audio_end_at": estimated_audio_end_at,
-                            "safe_audio_end_at": safe_audio_end_at,
-                            "guard_until": guard_until,
-                            "updated_at": ended_at,
-                        },
-                    )
+                else:
+                    print("audio playback skipped or failed", flush=True)
+            finally:
+                remaining = safe_audio_end_at - time.time()
+                if remaining > 0:
+                    print(f"waiting for estimated audio end remaining={remaining:.2f}s", flush=True)
+                    time.sleep(remaining)
+                ended_at = time.time()
+                guard_until = ended_at + CONFIG.tts_guard_grace_sec
+                _write_tts_guard(
+                    False,
+                    play_kind,
+                    play_text,
+                    play_session_id,
+                    extra_fields={
+                        "ended_at": ended_at,
+                        "wav_duration_sec": wav_duration_sec,
+                        "estimated_audio_end_at": estimated_audio_end_at,
+                        "safe_audio_end_at": safe_audio_end_at,
+                        "guard_until": guard_until,
+                        "updated_at": ended_at,
+                    },
+                )
                 if play_session_id and _current_session is not None:
                     _current_session.record(
                         "tts_play_finished",
