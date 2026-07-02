@@ -5,6 +5,13 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SDK_PATH = PROJECT_ROOT / "deps" / "qwen_ros_node_edg_tts" / "third_party" / "unitree_sdk2_python"
+for path in (PROJECT_ROOT, SDK_PATH):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from unitree_sdk2py.g1.arm.g1_arm_action_client import action_map
 
@@ -69,6 +76,9 @@ def main() -> int:
 
 
 def _run_via_relay(args: argparse.Namespace, action_name: str) -> int:
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
     from robot_relay.robot_relay_client import RobotRelayClient, RobotRelayError
 
     host = os.environ.get("ROBOT_RELAY_HOST", "192.168.123.164")
