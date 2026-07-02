@@ -22,6 +22,10 @@ release-output/
 *.wav
 *.mp3
 
+# Local project notes and planning records
+docs/work_logs/
+docs/plans/
+
 # Local chat memory
 xjtlu-rag-system/chat_memory.db
 *.db

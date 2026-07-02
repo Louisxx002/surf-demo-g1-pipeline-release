@@ -124,7 +124,7 @@ class LlmSurfContextNode(Node):
         self._write_status()
         self._update_status(last_wake=wake_word, last_wake_time=self.surf_context.wake_time)
         self._session_record("wake_received", wake_word=wake_word, session_id=self._session_id)
-        self.get_logger().info(f"SURF wake detected: {wake_word} session={self._session_id}")
+        self.get_logger().info(f'[WAKE] word="{wake_word}" session={self._session_id}')
         self.get_logger().info("on_wake no longer establishes conversation_session_id")
         self._open_wake_listen_window()
         self._maybe_play_wake_ack(wake_word)
@@ -161,7 +161,7 @@ class LlmSurfContextNode(Node):
                 last_speaker_score=score,
                 last_speaker_time=self.surf_context.speaker_time,
             )
-            self.get_logger().info(f"SURF speaker: {speaker} score={score:.3f}")
+            self.get_logger().info(f"[SPEAKER] label={speaker} score={score:.3f}")
 
     def on_audio_msg(self, msg: String) -> None:
         received_at = time.time()
@@ -258,8 +258,9 @@ class LlmSurfContextNode(Node):
             return
 
         self.get_logger().info(
-            f"SURF ASR text: {user_text}"
-            + (f" speaker={self.surf_context.speaker}" if self.surf_context.speaker else "")
+            "[ASR] "
+            + (f"speaker={self.surf_context.speaker} " if self.surf_context.speaker else "")
+            + f'text="{user_text}"'
         )
         self._update_status(
             last_asr=user_text,
@@ -397,7 +398,7 @@ class LlmSurfContextNode(Node):
             self._close_session("session_end")
             return
 
-        self.get_logger().info(f"LLM reply: {reply}")
+        self.get_logger().info(f'[LLM] reply="{reply}"')
         timing = llm_response.get("timing", {})
         self._update_status(
             last_reply=reply,
@@ -766,9 +767,13 @@ class LlmSurfContextNode(Node):
 
     def _play_standby_ack(self, session_id: str, reason: str) -> None:
         if not CONFIG.standby_ack_enable:
+            self.get_logger().info(f"[STANDBY] skipped reason={reason} enabled=False")
+            self._session_record("standby_ack_skipped", reason=reason, enabled=False, session_id=session_id)
             return
         ack_text = CONFIG.standby_ack_text.strip()
         if not ack_text:
+            self.get_logger().info(f"[STANDBY] skipped reason={reason} empty_text=True")
+            self._session_record("standby_ack_skipped", reason=reason, empty_text=True, session_id=session_id)
             return
         try:
             tts_ok = self._prepare_tts_wav("system_ack", ack_text, session_id=session_id)
@@ -1564,7 +1569,7 @@ class LlmSurfContextNode(Node):
             return
 
         self._run_wake_ack_action()
-        self.get_logger().info(f"Wake ack played: {ack_text}")
+        self.get_logger().info(f'[TTS] wake_ack text="{ack_text}"')
         self._update_status(
             last_wake_ack=ack_text,
             last_wake_ack_time=time.time(),
@@ -1742,7 +1747,7 @@ class LlmSurfContextNode(Node):
             self.get_logger().error(f"{CONFIG.tts_wav_path} not generated")
             return False
 
-        self.get_logger().info(f"TTS wav generated successfully: {CONFIG.tts_wav_path}")
+        self.get_logger().info(f"[TTS] wav_ready path={CONFIG.tts_wav_path}")
         return True
 
     def run_reply_action(
@@ -1942,8 +1947,9 @@ class LlmSurfContextNode(Node):
                     execution = keyword_execution
 
         self.get_logger().info(
-            "Reply action: "
-            f"{classification.get('label')} / {classification.get('official_name')} "
+            "[ACTION] "
+            f"label={classification.get('label')} "
+            f"official={classification.get('official_name')} "
             f"id={classification.get('action_id')} "
             f"score={classification.get('score')} "
             f"backend={classification.get('backend')} "
