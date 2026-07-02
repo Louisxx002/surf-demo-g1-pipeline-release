@@ -9,14 +9,28 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SDK_PATH = PROJECT_ROOT / "deps" / "qwen_ros_node_edg_tts" / "third_party" / "unitree_sdk2_python"
-for path in (PROJECT_ROOT, SDK_PATH):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from unitree_sdk2py.g1.arm.g1_arm_action_client import action_map
-
-
-ACTION_ID_TO_NAME = {action_id: name for name, action_id in action_map.items()}
+ACTION_NAME_TO_ID = {
+    "release arm": 99,
+    "two-hand kiss": 11,
+    "left kiss": 12,
+    "right kiss": 13,
+    "hands up": 15,
+    "clap": 17,
+    "high five": 18,
+    "hug": 19,
+    "heart": 20,
+    "right heart": 21,
+    "reject": 22,
+    "right hand up": 23,
+    "x-ray": 24,
+    "face wave": 25,
+    "high wave": 26,
+    "shake hand": 27,
+}
+ACTION_ID_TO_NAME = {action_id: name for name, action_id in ACTION_NAME_TO_ID.items()}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -50,6 +64,9 @@ def main() -> int:
     if os.environ.get("UNITREE_BACKEND", "direct").strip().lower() == "relay":
         return _run_via_relay(args, action_name)
 
+    if str(SDK_PATH) not in sys.path:
+        sys.path.insert(0, str(SDK_PATH))
+
     from unitree_sdk2py.core.channel import ChannelFactoryInitialize
     from unitree_sdk2py.g1.arm.g1_arm_action_client import G1ArmActionClient
 
@@ -64,9 +81,9 @@ def main() -> int:
     if ret != 0:
         return 3
 
-    if args.release_after_sec > 0 and args.id != action_map["release arm"]:
+    if args.release_after_sec > 0 and args.id != ACTION_NAME_TO_ID["release arm"]:
         time.sleep(args.release_after_sec)
-        release_id = action_map["release arm"]
+        release_id = ACTION_NAME_TO_ID["release arm"]
         release_ret = client.ExecuteAction(release_id)
         print(f"g1_arm_action release id={release_id} ret={release_ret}", flush=True)
         if release_ret != 0:
