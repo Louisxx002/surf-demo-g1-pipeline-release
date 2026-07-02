@@ -162,7 +162,7 @@ class ProjectConfig:
     unitree_audio_volume: int = _env_int("UNITREE_AUDIO_VOLUME", 85)
 
     robot_skill_enable: bool = _env_bool("LLM_ROBOT_SKILL_ENABLE", True)
-    robot_skill_execute: bool = _env_bool("LLM_ROBOT_SKILL_EXECUTE", False)
+    robot_skill_execute: bool = _env_bool("LLM_ROBOT_SKILL_EXECUTE", True)
     robot_skill_runner: Path = Path(
         _env("LLM_ROBOT_SKILL_RUNNER", str(PROJECT_ROOT / "scripts" / "g1_robot_skill_command.py"))
     )
