@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
 import socket
+from pathlib import Path
 from typing import Any
 
 
@@ -42,7 +44,16 @@ class RobotRelayClient:
         )
 
     def play_wav(self, path: str, stream: str = "tts") -> dict[str, Any]:
-        return self.request({"command": "play_wav", "path": path, "stream": stream})
+        wav_path = Path(path)
+        wav_bytes = wav_path.read_bytes()
+        return self.request(
+            {
+                "command": "play_wav",
+                "filename": wav_path.name,
+                "stream": stream,
+                "wav_b64": base64.b64encode(wav_bytes).decode("ascii"),
+            }
+        )
 
     def request(self, payload: dict[str, Any]) -> dict[str, Any]:
         command = str(payload.get("command", "unknown"))
@@ -80,4 +91,3 @@ class RobotRelayClient:
                 break
             chunks.append(chunk)
         return b"".join(chunks)
-

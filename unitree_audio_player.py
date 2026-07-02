@@ -58,11 +58,8 @@ class RelayUnitreeBackend:
         return response.get("ret", 0)
 
     def play(self, wav_path: Path, text: str, stream_name: str = "tts") -> bool:
-        if not text.strip():
-            print(f"relay playback skipped: no text context for {wav_path}", flush=True)
-            return False
-        response = self.client.say_text(text)
-        print(f"relay played text stream={stream_name}: {response}", flush=True)
+        response = self.client.play_wav(str(wav_path), stream_name)
+        print(f"relay played wav stream={stream_name}: {response}", flush=True)
         return True
 
 

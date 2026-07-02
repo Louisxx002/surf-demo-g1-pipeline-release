@@ -1,5 +1,6 @@
 import json
 import socket
+import base64
 
 import pytest
 
@@ -85,3 +86,23 @@ def test_connection_failure_raises_clear_error(monkeypatch):
 
     with pytest.raises(RobotRelayError, match="robot.local:9999"):
         client.health()
+
+
+def test_play_wav_sends_file_bytes_as_base64(monkeypatch, tmp_path):
+    wav_path = tmp_path / "reply.wav"
+    wav_bytes = b"RIFF-test-wav"
+    wav_path.write_bytes(wav_bytes)
+    fake = FakeSocket(b'{"ok":true,"command":"play_wav","ret":0,"bytes":13}\n')
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: fake)
+
+    client = RobotRelayClient("robot.local", 9999)
+    response = client.play_wav(str(wav_path), stream="tts")
+
+    payload = json.loads(fake.sent.decode("utf-8"))
+    assert payload == {
+        "command": "play_wav",
+        "filename": "reply.wav",
+        "stream": "tts",
+        "wav_b64": base64.b64encode(wav_bytes).decode("ascii"),
+    }
+    assert response["ret"] == 0
