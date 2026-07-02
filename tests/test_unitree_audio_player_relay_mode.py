@@ -33,3 +33,20 @@ def test_relay_backend_uses_wav_playback_not_text_tts():
 
     assert "self.client.play_wav(" in relay_block
     assert "self.client.say_text(" not in relay_block
+
+
+def test_audio_player_caps_unreasonable_duration_waits():
+    source_path = Path(__file__).resolve().parents[1] / "unitree_audio_player.py"
+    source = source_path.read_text(encoding="utf-8")
+
+    assert "MAX_REASONABLE_TTS_DURATION_SEC" in source
+    assert "unreasonable wav duration" in source
+    assert "return 0.0" in source
+
+
+def test_audio_player_waits_for_stable_tts_file_before_playback():
+    source_path = Path(__file__).resolve().parents[1] / "unitree_audio_player.py"
+    source = source_path.read_text(encoding="utf-8")
+
+    assert "def _wait_for_stable_file" in source
+    assert "_wait_for_stable_file(CONFIG.tts_wav_path)" in source

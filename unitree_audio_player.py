@@ -17,6 +17,7 @@ _light_state = {"color": "idle", "red": 0, "green": 0, "blue": 0, "effect": "sol
 NON_REPLY_KINDS = ("wake_ack", "thinking_ack", "system_ack")
 played_ids = deque(maxlen=20)
 played_id_set = set()
+MAX_REASONABLE_TTS_DURATION_SEC = 120.0
 
 
 class DirectUnitreeBackend:
@@ -106,10 +107,36 @@ def _wav_duration_sec(path: Path) -> float:
         with wave.open(str(path), "rb") as wf:
             rate = float(wf.getframerate() or 1)
             frames = float(wf.getnframes() or 0)
-            return frames / rate
+            duration = frames / rate
+            if duration > MAX_REASONABLE_TTS_DURATION_SEC:
+                print(
+                    f"unreasonable wav duration ignored: {duration:.2f}s path={path}",
+                    flush=True,
+                )
+                return 0.0
+            return duration
     except Exception as exc:
         print(f"failed to read wav duration: {exc}", flush=True)
         return 0.0
+
+
+def _wait_for_stable_file(path: Path, timeout_sec: float = 2.0, stable_sec: float = 0.15) -> None:
+    deadline = time.time() + timeout_sec
+    last_state: tuple[int, int] | None = None
+    stable_since = time.time()
+    while time.time() < deadline:
+        try:
+            stat = path.stat()
+            state = (stat.st_size, stat.st_mtime_ns)
+        except FileNotFoundError:
+            time.sleep(0.05)
+            continue
+        if state != last_state:
+            last_state = state
+            stable_since = time.time()
+        elif time.time() - stable_since >= stable_sec:
+            return
+        time.sleep(0.05)
 
 
 def _write_followup_control(session_id: str, reason: str) -> None:
@@ -257,6 +284,7 @@ while True:
         # 只有文件更新才播放
         if current_mtime != last_mtime:
             last_mtime = current_mtime
+            _wait_for_stable_file(CONFIG.tts_wav_path)
             play_id = _build_play_id(
                 play_kind,
                 play_session_id,
