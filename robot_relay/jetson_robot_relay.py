@@ -112,7 +112,7 @@ def _handle_conn(relay: JetsonRobotRelay, conn: socket.socket, addr: object) -> 
         raw = _recv_all(conn)
         try:
             request = json.loads(raw.decode("utf-8"))
-            print(f"[relay] recv from {addr}: {request}", flush=True)
+            print(f"[relay] recv from {addr}: {_summarize_request(request)}", flush=True)
             response = relay.handle(request)
         except Exception as exc:
             response = {"ok": False, "command": "unknown", "error": repr(exc)}
@@ -127,6 +127,14 @@ def _recv_all(conn: socket.socket) -> bytes:
             break
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _summarize_request(request: dict[str, Any]) -> dict[str, Any]:
+    summary = dict(request)
+    wav_b64 = summary.pop("wav_b64", None)
+    if wav_b64 is not None:
+        summary["wav_b64_len"] = len(str(wav_b64))
+    return summary
 
 
 def _read_wav_pcm(wav_bytes: bytes) -> tuple[bytes, int, int]:
