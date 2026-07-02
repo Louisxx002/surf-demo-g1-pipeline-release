@@ -167,6 +167,10 @@ class ProjectConfig:
         _env("LLM_ROBOT_SKILL_RUNNER", str(PROJECT_ROOT / "scripts" / "g1_robot_skill_command.py"))
     )
     robot_skill_ack_enable: bool = _env_bool("LLM_ROBOT_SKILL_ACK_ENABLE", True)
+    robot_skill_song_file: Path = Path(
+        _env("LLM_ROBOT_SKILL_SONG_FILE", str(runtime_dir / "songs" / "song_1.wav"))
+    )
+    robot_skill_sing_fallback_text: str = _env("LLM_ROBOT_SKILL_SING_FALLBACK_TEXT", "啦啦啦，小浦给你唱一首歌。")
     locomotion_max_vx: float = _env_float("LLM_LOCOMOTION_MAX_VX", 0.2)
     locomotion_max_vy: float = _env_float("LLM_LOCOMOTION_MAX_VY", 0.1)
     locomotion_max_yaw: float = _env_float("LLM_LOCOMOTION_MAX_YAW", 0.4)

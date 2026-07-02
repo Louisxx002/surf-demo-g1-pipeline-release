@@ -4,6 +4,7 @@ import difflib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -1178,6 +1179,16 @@ class LlmSurfContextNode(Node):
             )
         self._set_wake_light_blue()
 
+        if command_name == "sing":
+            song_ok = self._queue_robot_skill_song(session_id)
+            self._update_status(
+                last_robot_skill_command=command_name,
+                last_robot_skill_text=text,
+                last_robot_skill_ok=song_ok,
+                last_robot_skill_time=time.time(),
+            )
+            return
+
         runner_ok = self._run_robot_skill_runner(command_name, session_id)
         ack_text = self._robot_skill_ack_text(command_name)
         if CONFIG.robot_skill_ack_enable and ack_text:
@@ -1199,6 +1210,65 @@ class LlmSurfContextNode(Node):
             last_robot_skill_ok=runner_ok,
             last_robot_skill_time=time.time(),
         )
+
+    def _queue_robot_skill_song(self, session_id: str) -> bool:
+        song_path = CONFIG.robot_skill_song_file
+        if song_path.exists() and song_path.is_file():
+            if song_path.suffix.lower() != ".wav":
+                self.get_logger().warn(
+                    f"robot skill sing file must be wav for direct playback path={song_path}"
+                )
+            else:
+                try:
+                    with self._tts_lock:
+                        CONFIG.runtime_dir.mkdir(parents=True, exist_ok=True)
+                        CONFIG.tts_wav_path.parent.mkdir(parents=True, exist_ok=True)
+                        self._write_tts_play_context(
+                            "system_ack",
+                            f"song:{song_path.name}",
+                            session_id=session_id,
+                        )
+                        shutil.copyfile(song_path, CONFIG.tts_wav_path)
+                    self.get_logger().info(f"robot skill song queued path={song_path}")
+                    self._session_record(
+                        "robot_skill_song_queued",
+                        path=str(song_path),
+                        session_id=session_id,
+                    )
+                    return True
+                except Exception as exc:
+                    self.get_logger().warn(f"robot skill song queue failed path={song_path} error={exc}")
+                    self._session_record(
+                        "robot_skill_song_failed",
+                        path=str(song_path),
+                        error=str(exc),
+                        session_id=session_id,
+                    )
+
+        fallback_text = CONFIG.robot_skill_sing_fallback_text.strip()
+        if not fallback_text:
+            self.get_logger().warn(f"robot skill sing failed: song file missing path={song_path}")
+            self._session_record(
+                "robot_skill_song_failed",
+                path=str(song_path),
+                reason="missing_song_file_and_empty_fallback",
+                session_id=session_id,
+            )
+            return False
+
+        try:
+            tts_ok = self._prepare_tts_wav("system_ack", fallback_text, session_id=session_id)
+        except Exception as exc:
+            self.get_logger().warn(f"robot skill sing fallback TTS failed: {exc}")
+            tts_ok = False
+        if tts_ok:
+            self.get_logger().info("robot skill sing fallback TTS queued")
+            self._session_record(
+                "robot_skill_song_fallback_queued",
+                text=fallback_text,
+                session_id=session_id,
+            )
+        return tts_ok
 
     def _run_robot_skill_runner(self, command_name: str, session_id: str) -> bool:
         runner = CONFIG.robot_skill_runner
