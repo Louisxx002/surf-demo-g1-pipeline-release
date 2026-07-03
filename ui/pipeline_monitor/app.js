@@ -9,6 +9,7 @@ const turnsList = document.querySelector("#turnsList");
 const pipelineStatus = document.querySelector("#pipelineStatus");
 const startPipelineButton = document.querySelector("#startPipelineButton");
 const stopPipelineButton = document.querySelector("#stopPipelineButton");
+const readinessList = document.querySelector("#readinessList");
 
 const maxEvents = 240;
 const turnItems = new Map();
@@ -188,6 +189,65 @@ function updatePipelineStatus(payload) {
   const state = payload?.state || "unknown";
   pipelineStatus.textContent = `Pipeline: ${state}`;
   pipelineStatus.className = `status ${state === "running" ? "ok" : state === "partial" ? "partial" : state === "stopped" ? "" : "error"}`;
+  renderReadiness(payload || {});
+}
+
+function renderReadiness(payload) {
+  if (!readinessList) return;
+  const components = payload.components || fallbackReadinessFromServices(payload.services || {});
+  const preferredOrder = ["surf-voice-runtime", "surf-llm-node", "surf-llm-audio-player", "robot_relay"];
+  const entries = preferredOrder
+    .filter((key) => components[key])
+    .map((key) => [key, components[key]]);
+
+  const fragment = document.createDocumentFragment();
+  for (const [key, component] of entries) {
+    const item = document.createElement("div");
+    item.className = `readiness-item ${component.ready ? "ready" : "not-ready"}`;
+
+    const main = document.createElement("div");
+    main.className = "readiness-main";
+    const label = document.createElement("strong");
+    label.textContent = component.label || key;
+    const state = document.createElement("span");
+    state.textContent = component.ready ? "ready" : "not ready";
+    main.append(label, state);
+
+    const detail = document.createElement("p");
+    const parts = [];
+    if (component.endpoint) parts.push(component.endpoint);
+    if (component.elapsed_ms !== "" && component.elapsed_ms !== undefined) parts.push(`${component.elapsed_ms} ms`);
+    if (!component.ready && component.hint) parts.push(component.hint);
+    detail.textContent = parts.join("  ·  ");
+
+    item.append(main, detail);
+    fragment.appendChild(item);
+  }
+  readinessList.replaceChildren(fragment);
+}
+
+function fallbackReadinessFromServices(services) {
+  const labels = {
+    "surf-voice-runtime": "语音识别",
+    "surf-llm-node": "LLM 对话节点",
+    "surf-llm-audio-player": "TTS/灯光/动作播放器",
+  };
+  const components = {};
+  for (const [key, service] of Object.entries(services)) {
+    components[key] = {
+      label: labels[key] || key,
+      ready: Boolean(service.active),
+      state: service.state || "unknown",
+      hint: service.active ? "" : `本机服务未运行：${key}`,
+    };
+  }
+  components.robot_relay = {
+    label: "机器人中转服务",
+    ready: false,
+    state: "unknown",
+    hint: "当前 monitor 后端未返回 relay 检查结果，请重启 UI monitor。",
+  };
+  return components;
 }
 
 async function refreshPipelineStatus() {

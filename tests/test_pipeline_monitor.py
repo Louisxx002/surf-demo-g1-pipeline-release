@@ -126,10 +126,32 @@ class PipelineMonitorTests(unittest.TestCase):
             stdout = "active\n" if service in {"surf-voice-runtime", "surf-llm-node", "surf-llm-audio-player"} else "inactive\n"
             return type("Result", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
 
-        status = pipeline_status(command_runner=fake_runner)
+        def fake_relay_checker():
+            return {"ready": True, "state": "ready", "endpoint": "192.168.123.164:9999"}
+
+        status = pipeline_status(command_runner=fake_runner, relay_checker=fake_relay_checker)
 
         self.assertEqual(status["state"], "running")
         self.assertTrue(status["services"]["surf-voice-runtime"]["active"])
+        self.assertTrue(status["components"]["robot_relay"]["ready"])
+
+    def test_pipeline_status_reports_partial_when_robot_relay_is_not_ready(self):
+        def fake_runner(command, **kwargs):
+            return type("Result", (), {"returncode": 0, "stdout": "active\n", "stderr": ""})()
+
+        def fake_relay_checker():
+            return {
+                "ready": False,
+                "state": "not_ready",
+                "endpoint": "192.168.123.164:9999",
+                "hint": "cd ~/surf_robot_relay && ./scripts/run_jetson_robot_relay.sh",
+            }
+
+        status = pipeline_status(command_runner=fake_runner, relay_checker=fake_relay_checker)
+
+        self.assertEqual(status["state"], "partial")
+        self.assertFalse(status["components"]["robot_relay"]["ready"])
+        self.assertIn("run_jetson_robot_relay", status["components"]["robot_relay"]["hint"])
 
     def test_run_pipeline_command_builds_safe_start_environment(self):
         calls = []

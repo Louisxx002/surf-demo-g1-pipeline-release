@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>G1 Pipeline Monitor</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260703-pipeline-controls" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260704-readiness" />
   </head>
   <body>
     <main class="app">
@@ -20,6 +20,14 @@
           <div id="connection" class="status">Connecting</div>
         </div>
       </header>
+
+      <section class="readiness" aria-label="运行组件状态">
+        <div class="events-head">
+          <h2>组件状态</h2>
+          <span>not ready 时先处理对应组件</span>
+        </div>
+        <div id="readinessList" class="readiness-list"></div>
+      </section>
 
       <section class="summary" aria-label="当前轮次">
         <div>
@@ -55,6 +63,6 @@
       </div>
     </main>
 
-    <script src="/static/app.js?v=20260703-pipeline-controls"></script>
+    <script src="/static/app.js?v=20260704-readiness"></script>
   </body>
 </html>

@@ -20,6 +20,11 @@ DEFAULT_LOGS_DIR = PROJECT_ROOT / "logs"
 STATIC_DIR = PROJECT_ROOT / "ui" / "pipeline_monitor"
 IGNORED_LOG_DIRS = {"default", "manual-relay-test"}
 PIPELINE_SERVICES = ("surf-voice-runtime", "surf-llm-node", "surf-llm-audio-player")
+PIPELINE_COMPONENT_LABELS = {
+    "surf-voice-runtime": "语音识别",
+    "surf-llm-node": "LLM 对话节点",
+    "surf-llm-audio-player": "TTS/灯光/动作播放器",
+}
 PIPELINE_ENV_DEFAULTS = {
     "UNITREE_ENABLE": "1",
     "UNITREE_BACKEND": "relay",
@@ -165,8 +170,46 @@ def _completed_process_payload(result: Any) -> dict[str, Any]:
     }
 
 
-def pipeline_status(command_runner: Any = subprocess.run) -> dict[str, Any]:
+def robot_relay_status(
+    host: str | None = None,
+    port: str | int | None = None,
+    timeout_sec: float = 1.5,
+) -> dict[str, Any]:
+    host = host or os.environ.get("ROBOT_RELAY_HOST") or PIPELINE_ENV_DEFAULTS["ROBOT_RELAY_HOST"]
+    port = int(port or os.environ.get("ROBOT_RELAY_PORT") or PIPELINE_ENV_DEFAULTS["ROBOT_RELAY_PORT"])
+    endpoint = f"{host}:{port}"
+    hint = f"ssh unitree@{host} 后运行：cd ~/surf_robot_relay && ./scripts/run_jetson_robot_relay.sh"
+    started_at = time.time()
+    try:
+        from robot_relay.robot_relay_client import RobotRelayClient
+
+        response = RobotRelayClient(host, port, timeout_sec=timeout_sec).health()
+        ok = bool(response.get("ok"))
+        return {
+            "ready": ok,
+            "state": "ready" if ok else "not_ready",
+            "endpoint": endpoint,
+            "elapsed_ms": int((time.time() - started_at) * 1000),
+            "response": response,
+            "hint": "" if ok else hint,
+        }
+    except Exception as exc:
+        return {
+            "ready": False,
+            "state": "not_ready",
+            "endpoint": endpoint,
+            "elapsed_ms": int((time.time() - started_at) * 1000),
+            "error": str(exc),
+            "hint": hint,
+        }
+
+
+def pipeline_status(
+    command_runner: Any = subprocess.run,
+    relay_checker: Any = robot_relay_status,
+) -> dict[str, Any]:
     services: dict[str, dict[str, Any]] = {}
+    components: dict[str, dict[str, Any]] = {}
     active_count = 0
     for service in PIPELINE_SERVICES:
         result = command_runner(
@@ -184,15 +227,31 @@ def pipeline_status(command_runner: Any = subprocess.run) -> dict[str, Any]:
             "active": is_active,
             "returncode": int(getattr(result, "returncode", -1)),
         }
+        components[service] = {
+            "label": PIPELINE_COMPONENT_LABELS.get(service, service),
+            "ready": is_active,
+            "state": "ready" if is_active else (state or "unknown"),
+            "hint": f"本机服务未运行：{service}",
+        }
 
-    if active_count == len(PIPELINE_SERVICES):
+    relay = relay_checker()
+    components["robot_relay"] = {
+        "label": "机器人中转服务",
+        "ready": bool(relay.get("ready")),
+        "state": str(relay.get("state", "unknown")),
+        "endpoint": str(relay.get("endpoint", "")),
+        "hint": str(relay.get("hint", "")),
+        "elapsed_ms": relay.get("elapsed_ms", ""),
+    }
+
+    if active_count == len(PIPELINE_SERVICES) and relay.get("ready"):
         state = "running"
     elif active_count == 0:
         state = "stopped"
     else:
         state = "partial"
 
-    return {"ok": True, "state": state, "services": services}
+    return {"ok": True, "state": state, "services": services, "components": components, "relay": relay}
 
 
 def run_pipeline_command(action: str, command_runner: Any = subprocess.run) -> dict[str, Any]:

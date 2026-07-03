@@ -127,6 +127,8 @@ class ProjectConfig:
     followup_timeout_sec: float = _env_float("LLM_FOLLOWUP_TIMEOUT_SEC", 8.0)
     followup_prompt_enable: bool = _env_bool("LLM_FOLLOWUP_PROMPT_ENABLE", True)
     followup_prompt_text: str = _env("LLM_FOLLOWUP_PROMPT_TEXT", "还有什么想问的吗？")
+    followup_prompt_text_zh: str = _env("LLM_FOLLOWUP_PROMPT_TEXT_ZH", followup_prompt_text)
+    followup_prompt_text_en: str = _env("LLM_FOLLOWUP_PROMPT_TEXT_EN", "Anything else to ask?")
     reply_brief_enable: bool = _env_bool("LLM_REPLY_BRIEF_ENABLE", True)
     reply_max_chinese_chars: int = _env_int("LLM_REPLY_MAX_CHINESE_CHARS", 80)
     reply_brief_style: str = _env(

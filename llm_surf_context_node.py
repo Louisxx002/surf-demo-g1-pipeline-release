@@ -422,7 +422,7 @@ class LlmSurfContextNode(Node):
 
         tts_started_at = time.time()
         try:
-            reply_tts_text = self._build_reply_tts_text(reply)
+            reply_tts_text = self._build_reply_tts_text(reply, user_text=user_text)
             tts_ok = self._prepare_tts_wav("reply", reply_tts_text, session_id=request_session_id)
         except Exception as exc:
             self.get_logger().warn(f"Reply TTS request failed: {exc}")
@@ -1038,6 +1038,7 @@ class LlmSurfContextNode(Node):
             "你好小浦",
             "小浦思考中",
             "还有什么想问的吗",
+            "anything else to ask",
             "待机",
             "好的已关闭交互",
         )
@@ -1046,9 +1047,15 @@ class LlmSurfContextNode(Node):
             if normalized_asr == normalized_phrase:
                 return True, f"fixed_phrase:{phrase}"
 
-        followup_prompt = self._normalize_asr_text(CONFIG.followup_prompt_text)
-        if followup_prompt and followup_prompt in normalized_asr and (high_risk_window or guard_kind == "reply"):
-            return True, "reply_followup_prompt_echo"
+        followup_prompts = (
+            CONFIG.followup_prompt_text,
+            CONFIG.followup_prompt_text_zh,
+            CONFIG.followup_prompt_text_en,
+        )
+        for prompt_text in followup_prompts:
+            followup_prompt = self._normalize_asr_text(prompt_text)
+            if followup_prompt and followup_prompt in normalized_asr and (high_risk_window or guard_kind == "reply"):
+                return True, "reply_followup_prompt_echo"
 
         if not normalized_tts:
             return False, ""
@@ -1118,10 +1125,19 @@ class LlmSurfContextNode(Node):
             f"\n用户说：{user_text}"
         )
 
-    def _build_reply_tts_text(self, reply: str) -> str:
+    @staticmethod
+    def _looks_english(text: str) -> bool:
+        return bool(re.search(r"[A-Za-z]", text or "")) and not bool(re.search(r"[\u4e00-\u9fff]", text or ""))
+
+    def _followup_prompt_for_text(self, reply: str, user_text: str = "") -> str:
+        if self._looks_english(user_text) or self._looks_english(reply):
+            return CONFIG.followup_prompt_text_en.strip()
+        return CONFIG.followup_prompt_text_zh.strip()
+
+    def _build_reply_tts_text(self, reply: str, user_text: str = "") -> str:
         if not CONFIG.followup_enable or not CONFIG.followup_prompt_enable:
             return reply
-        prompt = CONFIG.followup_prompt_text.strip()
+        prompt = self._followup_prompt_for_text(reply, user_text)
         if not prompt:
             return reply
         return f"{reply} {prompt}".strip()

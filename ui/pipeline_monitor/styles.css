@@ -35,6 +35,7 @@ body {
 
 .topbar,
 .summary,
+.readiness,
 .turns,
 .events {
   background: var(--panel);
@@ -129,6 +130,59 @@ h1 {
   font-size: 17px;
   font-weight: 560;
   line-height: 1.45;
+}
+
+.readiness {
+  margin-top: 14px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.readiness-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.readiness-item {
+  min-height: 82px;
+  padding: 12px;
+  background: var(--panel-2);
+}
+
+.readiness-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.readiness-main strong {
+  font-size: 13px;
+}
+
+.readiness-main span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.readiness-item.ready .readiness-main span {
+  color: var(--asr);
+}
+
+.readiness-item.not-ready .readiness-main span {
+  color: var(--error);
+}
+
+.readiness-item p {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
 }
 
 .monitor-grid {
@@ -353,7 +407,8 @@ button:disabled {
   }
 
   .topbar,
-  .summary {
+  .summary,
+  .readiness-list {
     grid-template-columns: 1fr;
   }
 
