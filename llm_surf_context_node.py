@@ -812,6 +812,12 @@ class LlmSurfContextNode(Node):
             "在哪",
             "什么",
             "哪些",
+            "谁",
+            "你是",
+            "你叫",
+            "名字",
+            "身份",
+            "自我介绍",
             "多少",
             "怎么",
             "为什么",
@@ -1686,30 +1692,55 @@ class LlmSurfContextNode(Node):
         threading.Thread(target=self._run_thinking_action_script, daemon=True).start()
 
     def _run_thinking_action_script(self) -> None:
-        script = (
-            CONFIG.project_root
-            / "deps"
-            / "qwen_ros_node_edg_tts"
-            / "third_party"
-            / "unitree_sdk2_python"
-            / "g1"
-            / "high_level"
-            / "g1_arm7_sdk_dds_example.py"
-        )
+        started_at = time.time()
         try:
-            subprocess.run(
-                [
-                    os.environ.get("LLM_PYTHON", os.environ.get("QWEN_PYTHON", "python3")),
-                    str(script),
-                    CONFIG.unitree_network_interface,
-                ],
-                input="\n",
-                text=True,
-                check=False,
-                env=self.action_env(),
+            command = [
+                str(CONFIG.action_runner),
+                "--network",
+                CONFIG.unitree_network_interface,
+                "--id",
+                str(CONFIG.thinking_action_id),
+            ]
+            if CONFIG.thinking_action_release_after_sec > 0:
+                command.extend(["--release_after_sec", str(CONFIG.thinking_action_release_after_sec)])
+            try:
+                completed = subprocess.run(
+                    command,
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                    timeout=20,
+                    env=self.action_env(),
+                )
+            except Exception as exc:
+                self.get_logger().warn(f"Thinking action failed: {exc}")
+                self._session_record(
+                    "thinking_action_result",
+                    action_id=CONFIG.thinking_action_id,
+                    executed=False,
+                    reason=str(exc),
+                    session_id=self._session_id,
+                )
+                return
+            if completed.stdout:
+                self.get_logger().info(f"Thinking action stdout: {completed.stdout.strip()}")
+            if completed.stderr:
+                self.get_logger().warn(f"Thinking action stderr: {completed.stderr.strip()}")
+            executed = completed.returncode == 0
+            reason = "runner_completed" if executed else f"runner_exit_{completed.returncode}"
+            elapsed_ms = self._elapsed_ms(started_at, time.time())
+            self.get_logger().info(
+                f"Thinking action: id={CONFIG.thinking_action_id} "
+                f"executed={executed} reason={reason} elapsed_ms={elapsed_ms}"
             )
-        except Exception as exc:
-            self.get_logger().warn(f"Thinking action failed: {exc}")
+            self._session_record(
+                "thinking_action_result",
+                action_id=CONFIG.thinking_action_id,
+                executed=executed,
+                reason=reason,
+                elapsed_ms=elapsed_ms,
+                session_id=self._session_id,
+            )
         finally:
             self._action_lock.release()
 

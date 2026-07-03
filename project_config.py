@@ -106,7 +106,7 @@ class ProjectConfig:
     wake_ack_action_id: int = _env_int_compat("SURF_LLM_WAKE_ACK_ACTION_ID", "SURF_QWEN_WAKE_ACK_ACTION_ID", 25)
     wake_ack_action_label: str = _env_compat("SURF_LLM_WAKE_ACK_ACTION_LABEL", "SURF_QWEN_WAKE_ACK_ACTION_LABEL", "面前挥手")
     wake_ack_guard_sec: float = _env_float("LLM_WAKE_ACK_GUARD_SEC", 0.8)
-    first_turn_strict_gate_enable: bool = _env_bool("LLM_FIRST_TURN_STRICT_GATE_ENABLE", True)
+    first_turn_strict_gate_enable: bool = _env_bool("LLM_FIRST_TURN_STRICT_GATE_ENABLE", False)
     first_turn_min_chars: int = _env_int("LLM_FIRST_TURN_MIN_CHARS", 2)
     first_turn_require_intent: bool = _env_bool("LLM_FIRST_TURN_REQUIRE_INTENT", False)
     first_turn_noise_texts: tuple[str, ...] = field(
@@ -115,11 +115,13 @@ class ProjectConfig:
             ("我在", "我", "在", "嗯", "啊", "呃", "哦", "好", "好的", "你好", "小浦", "你好小浦", "存在", "准在"),
         )
     )
-    thinking_ack_enable: bool = _env_bool_compat("SURF_LLM_THINKING_ACK_ENABLE", "SURF_QWEN_THINKING_ACK_ENABLE", True)
+    thinking_ack_enable: bool = _env_bool_compat("SURF_LLM_THINKING_ACK_ENABLE", "SURF_QWEN_THINKING_ACK_ENABLE", False)
     thinking_ack_text: str = _env_compat("SURF_LLM_THINKING_ACK_TEXT", "SURF_QWEN_THINKING_ACK_TEXT", "小浦思考中")
     thinking_ack_skip_action_intent: bool = _env_bool("LLM_THINKING_ACK_SKIP_ACTION_INTENT", True)
     thinking_ack_play_gap_sec: float = _env_float("LLM_THINKING_ACK_PLAY_GAP_SEC", 0.6)
     thinking_action_enable: bool = _env_bool_compat("SURF_LLM_THINKING_ACTION_ENABLE", "SURF_QWEN_THINKING_ACTION_ENABLE", False)
+    thinking_action_id: int = _env_int("LLM_THINKING_ACTION_ID", 25)
+    thinking_action_release_after_sec: float = _env_float("LLM_THINKING_ACTION_RELEASE_AFTER_SEC", 0.0)
     wake_listen_sec: float = _env_float_compat("SURF_LLM_WAKE_LISTEN_SEC", "SURF_QWEN_WAKE_LISTEN_SEC", 8.0)
     followup_enable: bool = _env_bool("LLM_FOLLOWUP_ENABLE", True)
     followup_timeout_sec: float = _env_float("LLM_FOLLOWUP_TIMEOUT_SEC", 8.0)
