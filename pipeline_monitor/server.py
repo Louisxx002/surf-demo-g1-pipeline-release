@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
+import subprocess
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,11 +12,27 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import parse_qs, urlparse
 
+from pipeline_log.latency_tracker import read_turn_summaries
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LOGS_DIR = PROJECT_ROOT / "logs"
 STATIC_DIR = PROJECT_ROOT / "ui" / "pipeline_monitor"
 IGNORED_LOG_DIRS = {"default", "manual-relay-test"}
+PIPELINE_SERVICES = ("surf-voice-runtime", "surf-llm-node", "surf-llm-audio-player")
+PIPELINE_ENV_DEFAULTS = {
+    "UNITREE_ENABLE": "1",
+    "UNITREE_BACKEND": "relay",
+    "ROBOT_RELAY_HOST": "192.168.123.164",
+    "ROBOT_RELAY_PORT": "9999",
+    "ROBOT_RELAY_TIMEOUT_SEC": "15",
+    "VOICE_AUDIO_SOURCE": "local",
+    "LLM_ACTION_EXECUTE": "1",
+    "LLM_ROBOT_SKILL_EXECUTE": "1",
+    "SURF_LLM_WAKE_LISTEN_SEC": "30",
+    "LLM_FOLLOWUP_TIMEOUT_SEC": "60",
+    "LLM_STANDBY_ACK_ENABLE": "0",
+}
 
 
 def _is_session_log(path: Path) -> bool:
@@ -136,6 +154,64 @@ def read_existing_events(log_path: Path, limit: int | None = None) -> list[dict[
     return events
 
 
+def _completed_process_payload(result: Any) -> dict[str, Any]:
+    return {
+        "returncode": int(getattr(result, "returncode", -1)),
+        "stdout": str(getattr(result, "stdout", "") or "").strip(),
+        "stderr": str(getattr(result, "stderr", "") or "").strip(),
+    }
+
+
+def pipeline_status(command_runner: Any = subprocess.run) -> dict[str, Any]:
+    services: dict[str, dict[str, Any]] = {}
+    active_count = 0
+    for service in PIPELINE_SERVICES:
+        result = command_runner(
+            ["systemctl", "--user", "is-active", service],
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+        state = str(getattr(result, "stdout", "") or "").strip()
+        is_active = state == "active"
+        active_count += int(is_active)
+        services[service] = {
+            "state": state or "unknown",
+            "active": is_active,
+            "returncode": int(getattr(result, "returncode", -1)),
+        }
+
+    if active_count == len(PIPELINE_SERVICES):
+        state = "running"
+    elif active_count == 0:
+        state = "stopped"
+    else:
+        state = "partial"
+
+    return {"ok": True, "state": state, "services": services}
+
+
+def run_pipeline_command(action: str, command_runner: Any = subprocess.run) -> dict[str, Any]:
+    if action not in {"start", "stop"}:
+        raise ValueError(f"Unsupported pipeline action: {action}")
+
+    env = os.environ.copy()
+    env.update(PIPELINE_ENV_DEFAULTS)
+    command = ["./scripts/run_pipeline.sh", "--mode", "wake"] if action == "start" else ["./scripts/stop_pipeline.sh"]
+    result = command_runner(
+        command,
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=90,
+    )
+    payload = _completed_process_payload(result)
+    payload.update({"ok": payload["returncode"] == 0, "action": action, "command": " ".join(command)})
+    return payload
+
+
 def _json_response(handler: BaseHTTPRequestHandler, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
@@ -164,8 +240,23 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                 query = parse_qs(parsed.query)
                 limit = int(query.get("limit", ["200"])[0])
                 self._serve_events(limit=limit)
+            elif parsed.path == "/api/turns":
+                query = parse_qs(parsed.query)
+                limit = int(query.get("limit", ["20"])[0])
+                self._serve_turns(limit=limit)
+            elif parsed.path == "/api/pipeline/status":
+                self._serve_pipeline_status()
             elif parsed.path == "/events":
                 self._serve_sse()
+            else:
+                self.send_error(HTTPStatus.NOT_FOUND)
+
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            if parsed.path == "/api/pipeline/start":
+                self._run_pipeline_action("start")
+            elif parsed.path == "/api/pipeline/stop":
+                self._run_pipeline_action("stop")
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -203,7 +294,7 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
         def _serve_events(self, limit: int = 200) -> None:
             latest = find_latest_pipeline_log(logs_dir)
             if latest is None:
-                _json_response(self, {"ok": False, "events": []})
+                _json_response(self, {"ok": False, "events": [], "turn_summaries": []})
                 return
             _json_response(
                 self,
@@ -212,8 +303,38 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                     "log_path": str(latest),
                     "session_id": latest.parent.name,
                     "events": read_existing_events(latest, limit=limit),
+                    "turn_summaries": read_turn_summaries(latest, limit=20),
                 },
             )
+
+        def _serve_turns(self, limit: int = 20) -> None:
+            latest = find_latest_pipeline_log(logs_dir)
+            if latest is None:
+                _json_response(self, {"ok": False, "turn_summaries": []})
+                return
+            _json_response(
+                self,
+                {
+                    "ok": True,
+                    "log_path": str(latest),
+                    "session_id": latest.parent.name,
+                    "turn_summaries": read_turn_summaries(latest, limit=limit),
+                },
+            )
+
+        def _serve_pipeline_status(self) -> None:
+            try:
+                _json_response(self, pipeline_status())
+            except Exception as exc:  # pragma: no cover - defensive UI endpoint
+                _json_response(self, {"ok": False, "state": "error", "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+        def _run_pipeline_action(self, action: str) -> None:
+            try:
+                payload = run_pipeline_command(action)
+                status = HTTPStatus.OK if payload["ok"] else HTTPStatus.INTERNAL_SERVER_ERROR
+                _json_response(self, payload, status)
+            except Exception as exc:  # pragma: no cover - defensive UI endpoint
+                _json_response(self, {"ok": False, "action": action, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
         def _serve_sse(self) -> None:
             self.send_response(HTTPStatus.OK)

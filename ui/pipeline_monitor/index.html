@@ -3,17 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SURF2026 Pipeline Monitor</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <title>G1 Pipeline Monitor</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260703-pipeline-controls" />
   </head>
   <body>
     <main class="app">
       <header class="topbar">
         <div>
-          <h1>SURF2026 Pipeline Monitor</h1>
+          <h1>G1 Pipeline Monitor</h1>
           <p id="logPath">等待日志...</p>
         </div>
-        <div id="connection" class="status">Connecting</div>
+        <div class="top-actions">
+          <div id="pipelineStatus" class="status">Pipeline: checking</div>
+          <button id="startPipelineButton" type="button">启动 Pipeline</button>
+          <button id="stopPipelineButton" type="button">停止 Pipeline</button>
+          <div id="connection" class="status">Connecting</div>
+        </div>
       </header>
 
       <section class="summary" aria-label="当前轮次">
@@ -26,20 +31,30 @@
           <strong id="lastLlm">-</strong>
         </div>
         <div>
-          <span>最新动作</span>
+          <span>最近执行动作</span>
           <strong id="lastAction">-</strong>
         </div>
       </section>
 
-      <section class="events" aria-label="事件时间线">
-        <div class="events-head">
-          <h2>实时事件</h2>
-          <button id="clearButton" type="button">清空显示</button>
-        </div>
-        <ol id="eventsList"></ol>
-      </section>
+      <div class="monitor-grid">
+        <section class="turns" aria-label="轮次耗时">
+          <div class="events-head">
+            <h2>轮次耗时</h2>
+            <span id="turnHint">仅显示已进入 LLM 的有效轮次</span>
+          </div>
+          <div id="turnsList" class="turns-list"></div>
+        </section>
+
+        <section class="events" aria-label="事件时间线">
+          <div class="events-head">
+            <h2>实时事件</h2>
+            <button id="clearButton" type="button">清空显示</button>
+          </div>
+          <ol id="eventsList"></ol>
+        </section>
+      </div>
     </main>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260703-pipeline-controls"></script>
   </body>
 </html>
