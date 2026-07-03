@@ -401,10 +401,13 @@ def _trim_reply_for_brief_mode(reply, user_text):
     sentence_parts = re.split(r"(?<=[。！？!?；;\n])", text)
     kept = []
     total = 0
+    first_part = ""
     for part in sentence_parts:
         part = part.strip()
         if not part:
             continue
+        if not first_part:
+            first_part = part
         part_len = len(part)
         if kept and total + part_len > max_chars:
             break
@@ -418,12 +421,9 @@ def _trim_reply_for_brief_mode(reply, user_text):
         if len(candidate) <= max_chars:
             return candidate
 
-    trimmed = text[:max_chars].rstrip()
-    if not trimmed:
-        return text
-    if trimmed[-1] not in "。！？!?；;":
-        trimmed = trimmed.rstrip("，,") + "。"
-    return trimmed
+    # Do not cut a spoken reply in the middle of a sentence. A too-long first
+    # sentence is better than a broken TTS answer that sounds abruptly stopped.
+    return first_part or text
 
 
 def infer_deepseek_with_memory(text, user_lang, session_id):

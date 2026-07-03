@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SURF2026 Pipeline Monitor</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div>
+          <h1>SURF2026 Pipeline Monitor</h1>
+          <p id="logPath">等待日志...</p>
+        </div>
+        <div id="connection" class="status">Connecting</div>
+      </header>
+
+      <section class="summary" aria-label="当前轮次">
+        <div>
+          <span>最新 ASR</span>
+          <strong id="lastAsr">-</strong>
+        </div>
+        <div>
+          <span>最新回复</span>
+          <strong id="lastLlm">-</strong>
+        </div>
+        <div>
+          <span>最新动作</span>
+          <strong id="lastAction">-</strong>
+        </div>
+      </section>
+
+      <section class="events" aria-label="事件时间线">
+        <div class="events-head">
+          <h2>实时事件</h2>
+          <button id="clearButton" type="button">清空显示</button>
+        </div>
+        <ol id="eventsList"></ol>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
