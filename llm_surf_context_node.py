@@ -312,7 +312,7 @@ class LlmSurfContextNode(Node):
                     followup_turn = True
                     command_text = user_text.strip()
                 else:
-                    if CONFIG.first_turn_strict_gate_enable and not self._conversation_session_id and self._wake_listen_waiting():
+                    if CONFIG.first_turn_strict_gate_enable and not self._conversation_session_id:
                         invalid, reason = self._is_invalid_first_turn_command(user_text)
                         normalized = self._normalize_first_turn_text(user_text)
                         if invalid:
@@ -338,9 +338,13 @@ class LlmSurfContextNode(Node):
                         self.get_logger().info(
                             f"valid first-turn command text={user_text} normalized={normalized} reason={valid_reason}"
                         )
-                    if not self._consume_wake_listen_window():
-                        self.get_logger().info("Second LLM wake filter did not match; ignoring ASR text.")
-                        return
+                    if self._wake_listen_waiting():
+                        self._consume_wake_listen_window()
+                    else:
+                        self.get_logger().info(
+                            "wake listen window inactive; accepting first-turn ASR text "
+                            "after noise/self-speech filters."
+                        )
                     command_text = user_text.strip()
             elif not command_text:
                 self._open_wake_listen_window()
