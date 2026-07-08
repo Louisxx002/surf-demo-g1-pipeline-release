@@ -91,6 +91,10 @@ h1 {
   min-width: 142px;
 }
 
+.session-status {
+  min-width: 142px;
+}
+
 .status.ok {
   color: var(--asr);
 }

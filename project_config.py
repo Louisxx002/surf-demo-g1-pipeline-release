@@ -138,9 +138,39 @@ class ProjectConfig:
     terminate_command_enable: bool = _env_bool("LLM_TERMINATE_COMMAND_ENABLE", True)
     terminate_commands: tuple[str, ...] = _env_list(
         "LLM_TERMINATE_COMMANDS",
-        ("关闭交互", "结束交互", "退出交互"),
+        (
+            "再见",
+            "拜拜",
+            "小浦再见",
+            "小浦拜拜",
+            "你退下吧",
+            "退下吧",
+            "没有问题了",
+            "我没有问题了",
+            "没问题了",
+            "不用了",
+            "先这样",
+            "结束对话",
+            "关闭交互",
+            "结束交互",
+            "退出交互",
+            "bye",
+            "bye bye",
+            "goodbye",
+            "see you",
+            "that is all",
+            "thats all",
+            "nothing else",
+            "no more question",
+            "no more questions",
+            "no more problem",
+            "no more problems",
+            "i have no more questions",
+            "i have no more problems",
+        ),
     )
     terminate_ack_text: str = _env("LLM_TERMINATE_ACK_TEXT", "好的，已关闭交互")
+    terminate_ack_text_en: str = _env("LLM_TERMINATE_ACK_TEXT_EN", "Xiaopu is standing by. Call me anytime you have another question.")
     standby_ack_enable: bool = _env_bool("LLM_STANDBY_ACK_ENABLE", True)
     standby_ack_text: str = _env("LLM_STANDBY_ACK_TEXT", "待机")
     tts_guard_enable: bool = _env_bool("LLM_TTS_GUARD_ENABLE", True)
@@ -241,3 +271,4 @@ class ProjectConfig:
 
 
 CONFIG = ProjectConfig()
+

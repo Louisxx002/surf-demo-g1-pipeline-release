@@ -21,10 +21,15 @@ from std_msgs.msg import Bool, String
 
 from pipeline_log.pipeline_logger import PipelineLogger, SessionLog
 from project_config import CONFIG
+from text_command_policy import matches_command, normalize_command_text, select_terminate_ack_text
 
 
 HTTP_SESSION = requests.Session()
 HTTP_SESSION.trust_env = False
+
+
+
+
 
 
 @dataclass
@@ -288,7 +293,7 @@ class LlmSurfContextNode(Node):
                     f"terminate command matched raw={user_text} command_text={terminate_text} "
                     f"normalized={self._normalize_command_text(terminate_text)}"
                 )
-                self._handle_terminate_command(request_session_id)
+                self._handle_terminate_command(request_session_id, terminate_text)
                 return
             skill_text = terminate_text if command_text is not None else user_text
             skill_context_allowed = (
@@ -370,7 +375,7 @@ class LlmSurfContextNode(Node):
                 f"terminate command matched raw={user_text} command_text={user_text} "
                 f"normalized={self._normalize_command_text(user_text)}"
             )
-            self._handle_terminate_command(request_session_id)
+            self._handle_terminate_command(request_session_id, user_text)
             return
         if not self._conversation_session_id:
             self._conversation_session_id = request_session_id
@@ -648,20 +653,14 @@ class LlmSurfContextNode(Node):
         self._session_record("followup_closed", reason=reason, session_id=session_id or self._session_id)
 
     def _normalize_command_text(self, text: str) -> str:
-        return re.sub(r"[\s，。！？、,.!?;:：；'\"“”‘’\-()（）\[\]{}]", "", text or "")
+        return normalize_command_text(text)
 
     def _is_terminate_command(self, text: str) -> bool:
         if not CONFIG.terminate_command_enable:
             return False
-        normalized = self._normalize_command_text(text)
-        if not normalized:
-            return False
-        for command in CONFIG.terminate_commands:
-            if normalized == self._normalize_command_text(command):
-                return True
-        return False
+        return matches_command(text, CONFIG.terminate_commands)
 
-    def _handle_terminate_command(self, session_id: str) -> None:
+    def _handle_terminate_command(self, session_id: str, user_text: str = "") -> None:
         self.get_logger().info("terminate command received; closing interaction")
         with self._wake_state_lock:
             self._conversation_session_id = ""
@@ -683,7 +682,11 @@ class LlmSurfContextNode(Node):
         self._write_followup_control_close(session_id, "terminate_command")
         self._set_wake_light_blue()
 
-        ack_text = CONFIG.terminate_ack_text.strip()
+        ack_text = select_terminate_ack_text(
+            user_text,
+            CONFIG.terminate_ack_text,
+            CONFIG.terminate_ack_text_en,
+        )
         if not ack_text:
             return
         try:
@@ -2263,3 +2266,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+

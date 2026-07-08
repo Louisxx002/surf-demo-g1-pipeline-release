@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 import edge_tts
+import http.client
 import json
 import os
 import re
@@ -7,6 +8,7 @@ import ssl
 import sys
 import urllib.error
 import urllib.request
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -221,6 +223,14 @@ def detect_language(text, preferred_lang=None):
     return top_lang
 
 
+def _edge_tts_proxy():
+    for name in ("EDGE_TTS_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
 async def tts(text, lang):
     voice = {
         "ja": "ja-JP-NanamiNeural",
@@ -228,7 +238,11 @@ async def tts(text, lang):
         "zh": "zh-CN-XiaoxiaoNeural"
     }[lang]
 
-    await edge_tts.Communicate(text, voice).save(str(CONFIG.tts_mp3_path))
+    await edge_tts.Communicate(
+        text,
+        voice,
+        proxy=_edge_tts_proxy(),
+    ).save(str(CONFIG.tts_mp3_path))
 
 
 def get_certifi_ca_file():
@@ -279,6 +293,14 @@ def infer_dashscope(text, user_lang):
     return response_data["choices"][0]["message"]["content"]
 
 
+def _deepseek_retry_count():
+    return max(1, int(os.environ.get("LLM_DEEPSEEK_RETRY_COUNT", "2")))
+
+
+def _deepseek_retry_delay_sec():
+    return max(0.0, float(os.environ.get("LLM_DEEPSEEK_RETRY_DELAY_SEC", "0.5")))
+
+
 def post_deepseek_chat_completion(payload):
     api_key = os.environ.get("LLM_DEEPSEEK_API_KEY") or os.environ.get("QWEN_DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
@@ -295,14 +317,24 @@ def post_deepseek_chat_completion(payload):
         method="POST",
     )
     context = ssl.create_default_context(cafile=get_certifi_ca_file())
-    try:
-        with urllib.request.urlopen(request, timeout=CONFIG.request_timeout_sec, context=context) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"DeepSeek API HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"DeepSeek API request failed: {exc}") from exc
+    last_exc = None
+    retry_count = _deepseek_retry_count()
+    for attempt in range(1, retry_count + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=CONFIG.request_timeout_sec, context=context) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"DeepSeek API HTTP {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError, http.client.IncompleteRead, ssl.SSLError) as exc:
+            last_exc = exc
+            if attempt >= retry_count:
+                break
+            delay = _deepseek_retry_delay_sec() * attempt
+            print(f"DeepSeek API transient error on attempt {attempt}/{retry_count}: {exc}; retrying in {delay:.1f}s", flush=True)
+            if delay:
+                time.sleep(delay)
+    raise RuntimeError(f"DeepSeek API request failed after {retry_count} attempt(s): {last_exc}") from last_exc
 
 
 def infer_deepseek(text, user_lang):

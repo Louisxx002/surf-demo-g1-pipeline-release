@@ -167,7 +167,21 @@ class PipelineMonitorTests(unittest.TestCase):
         env = calls[0][1]["env"]
         self.assertEqual(env["UNITREE_BACKEND"], "relay")
         self.assertEqual(env["ROBOT_RELAY_HOST"], "192.168.123.164")
-        self.assertEqual(env["SURF_LLM_WAKE_LISTEN_SEC"], "30")
+        self.assertEqual(env["SURF_LLM_WAKE_LISTEN_SEC"], "15")
+        self.assertEqual(env["LLM_FOLLOWUP_TIMEOUT_SEC"], "15")
+
+    def test_event_view_maps_session_state_events(self):
+        event = event_view(
+            {
+                "stage": "terminate_command",
+                "session_id": "20260704_120000_s001",
+            }
+        )
+
+        self.assertEqual(event["kind"], "state")
+        self.assertEqual(event["title"], "SESSION")
+        self.assertIn("关闭", event["message"])
+        self.assertEqual(event["meta"]["session_id"], "20260704_120000_s001")
 
     def test_run_pipeline_command_rejects_unknown_action(self):
         with self.assertRaises(ValueError):

@@ -37,8 +37,8 @@ PIPELINE_ENV_DEFAULTS = {
     "SURF_LLM_THINKING_ACK_ENABLE": "0",
     "SURF_LLM_THINKING_ACTION_ENABLE": "0",
     "LLM_THINKING_ACTION_ID": "25",
-    "SURF_LLM_WAKE_LISTEN_SEC": "30",
-    "LLM_FOLLOWUP_TIMEOUT_SEC": "60",
+    "SURF_LLM_WAKE_LISTEN_SEC": "15",
+    "LLM_FOLLOWUP_TIMEOUT_SEC": "15",
     "LLM_STANDBY_ACK_ENABLE": "0",
 }
 
@@ -131,6 +131,22 @@ def event_view(entry: dict[str, Any]) -> dict[str, Any]:
         title = "STANDBY"
         message = str(entry.get("reason", stage))
         meta = _compact_meta(entry, ("enabled", "empty_text", "session_id"))
+    elif stage == "terminate_command":
+        kind = "state"
+        title = "SESSION"
+        message = "用户主动关闭当前会话"
+        meta = _compact_meta(entry, ("session_id",))
+    elif stage == "followup_closed":
+        kind = "state"
+        title = "SESSION"
+        reason = str(entry.get("reason", stage))
+        message = "当前会话已关闭" if reason in {"timeout", "followup_timeout"} else f"当前会话已关闭：{reason}"
+        meta = _compact_meta(entry, ("reason", "session_id"))
+    elif stage == "followup_open":
+        kind = "state"
+        title = "SESSION"
+        message = "等待继续追问"
+        meta = _compact_meta(entry, ("timeout_sec", "reason", "session_id"))
     elif stage.startswith("followup") or stage.startswith("wake_listen"):
         kind = "state"
         title = "STATE"

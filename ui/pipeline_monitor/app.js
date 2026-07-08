@@ -7,6 +7,7 @@ const lastAction = document.querySelector("#lastAction");
 const clearButton = document.querySelector("#clearButton");
 const turnsList = document.querySelector("#turnsList");
 const pipelineStatus = document.querySelector("#pipelineStatus");
+const sessionStatus = document.querySelector("#sessionStatus");
 const startPipelineButton = document.querySelector("#startPipelineButton");
 const stopPipelineButton = document.querySelector("#stopPipelineButton");
 const readinessList = document.querySelector("#readinessList");
@@ -192,6 +193,12 @@ function updatePipelineStatus(payload) {
   renderReadiness(payload || {});
 }
 
+function setSessionStatus(label, className = "") {
+  if (!sessionStatus) return;
+  sessionStatus.textContent = `Session: ${label}`;
+  sessionStatus.className = `status session-status ${className}`.trim();
+}
+
 function renderReadiness(payload) {
   if (!readinessList) return;
   const components = payload.components || fallbackReadinessFromServices(payload.services || {});
@@ -289,6 +296,7 @@ function compactCommandOutput(value) {
 }
 
 function updateSummary(event) {
+  updateSessionStatus(event);
   if (event.kind === "asr") lastAsr.textContent = event.message || "-";
   if (event.kind === "llm") lastLlm.textContent = event.message || "-";
   if (event.kind === "action") {
@@ -299,6 +307,29 @@ function updateSummary(event) {
     }
   }
   if (event.log_path) logPath.textContent = event.log_path;
+}
+
+function updateSessionStatus(event) {
+  const stage = event.stage || event.raw?.stage || "";
+  if (event.kind === "wake" || stage === "wake_listen_open") {
+    setSessionStatus("等待问题", "partial");
+  } else if (stage === "asr_started" || stage === "followup_asr_started") {
+    setSessionStatus("录音识别中", "partial");
+  } else if (event.kind === "asr") {
+    setSessionStatus("LLM 处理中", "partial");
+  } else if (event.kind === "llm" || stage === "tts_ready") {
+    setSessionStatus("TTS 生成/待播放", "partial");
+  } else if (stage === "tts_play_started") {
+    setSessionStatus("机器人播放中", "partial");
+  } else if (stage === "tts_play_finished") {
+    setSessionStatus("等待追问", "ok");
+  } else if (stage === "followup_open") {
+    setSessionStatus("等待追问", "ok");
+  } else if (stage === "followup_closed" || stage === "terminate_command" || stage === "session_end") {
+    setSessionStatus("已关闭", "");
+  } else if (stage === "wake_listen_closed") {
+    setSessionStatus("待唤醒", "");
+  }
 }
 
 function addEvent(event) {
