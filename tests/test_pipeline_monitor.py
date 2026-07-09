@@ -73,6 +73,19 @@ class PipelineMonitorTests(unittest.TestCase):
         self.assertIn("高位挥手", action_event["message"])
         self.assertTrue(action_event["meta"]["executed"])
 
+        failed_event = event_view(
+            {
+                "stage": "llm_failed",
+                "error": "HTTPConnectionPool read timed out",
+                "timeout_sec": 20,
+                "session_id": "s001",
+            }
+        )
+        self.assertEqual(failed_event["kind"], "error")
+        self.assertEqual(failed_event["title"], "LLM_FAILED")
+        self.assertIn("timed out", failed_event["message"])
+        self.assertEqual(failed_event["meta"]["timeout_sec"], 20)
+
     def test_read_existing_events_skips_invalid_json_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "pipeline.log"
@@ -169,6 +182,7 @@ class PipelineMonitorTests(unittest.TestCase):
         self.assertEqual(env["ROBOT_RELAY_HOST"], "192.168.123.164")
         self.assertEqual(env["SURF_LLM_WAKE_LISTEN_SEC"], "15")
         self.assertEqual(env["LLM_FOLLOWUP_TIMEOUT_SEC"], "15")
+        self.assertEqual(env["LLM_REQUEST_TIMEOUT_SEC"], "20")
 
     def test_event_view_maps_session_state_events(self):
         event = event_view(

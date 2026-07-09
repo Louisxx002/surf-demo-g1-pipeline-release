@@ -37,6 +37,7 @@ PIPELINE_ENV_DEFAULTS = {
     "SURF_LLM_THINKING_ACK_ENABLE": "0",
     "SURF_LLM_THINKING_ACTION_ENABLE": "0",
     "LLM_THINKING_ACTION_ID": "25",
+    "LLM_REQUEST_TIMEOUT_SEC": "20",
     "SURF_LLM_WAKE_LISTEN_SEC": "15",
     "LLM_FOLLOWUP_TIMEOUT_SEC": "15",
     "LLM_STANDBY_ACK_ENABLE": "0",
@@ -108,6 +109,11 @@ def event_view(entry: dict[str, Any]) -> dict[str, Any]:
         title = "LLM"
         message = str(entry.get("reply", ""))
         meta = _compact_meta(entry, ("timing", "session_id"))
+    elif stage == "llm_failed":
+        kind = "error"
+        title = "LLM_FAILED"
+        message = str(entry.get("error", "")) or "llm_failed"
+        meta = _compact_meta(entry, ("timeout_sec", "session_id"))
     elif stage in {"tts_ready", "wake_ack_ready", "standby_ack_ready"}:
         kind = "tts"
         title = "TTS"

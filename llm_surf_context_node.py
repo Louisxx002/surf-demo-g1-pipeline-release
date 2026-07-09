@@ -401,8 +401,14 @@ class LlmSurfContextNode(Node):
         reply = str(llm_response.get("reply", "")).strip()
         action_payload = llm_response.get("action", {})
         if not reply:
+            error = str(llm_response.get("error", "")).strip() or "empty_reply"
             self._update_status(last_error="llm_request_failed", updated_at=time.time())
-            self._session_record("llm_failed", session_id=request_session_id)
+            self._session_record(
+                "llm_failed",
+                error=error,
+                timeout_sec=CONFIG.request_timeout_sec,
+                session_id=request_session_id,
+            )
             self._set_wake_light_blue()
             self._close_session("session_end")
             return
@@ -1462,7 +1468,7 @@ class LlmSurfContextNode(Node):
             result = response.json()
         except Exception as exc:
             self.get_logger().error(f"LLM request failed: {exc}")
-            return {}
+            return {"reply": "", "error": str(exc)}
 
         reply = str(result.get("reply", "")).strip()
         if not reply:
@@ -2266,7 +2272,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
 
 

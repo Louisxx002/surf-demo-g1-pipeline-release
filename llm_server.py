@@ -245,6 +245,16 @@ async def tts(text, lang):
     ).save(str(CONFIG.tts_mp3_path))
 
 
+async def try_tts(text: str, lang: str) -> tuple[bool, str]:
+    try:
+        await tts(text, lang)
+        return True, ""
+    except Exception as exc:
+        error = repr(exc)
+        print(f"Edge TTS failed; returning text reply without audio: {error}", flush=True)
+        return False, error
+
+
 def get_certifi_ca_file():
     try:
         import certifi
@@ -301,6 +311,42 @@ def _deepseek_retry_delay_sec():
     return max(0.0, float(os.environ.get("LLM_DEEPSEEK_RETRY_DELAY_SEC", "0.5")))
 
 
+def _deepseek_request_timeout_sec():
+    value = os.environ.get("LLM_DEEPSEEK_REQUEST_TIMEOUT_SEC") or os.environ.get("OPENAI_REQUEST_TIMEOUT_SEC")
+    if value:
+        return max(1.0, float(value))
+    return min(CONFIG.request_timeout_sec, 8.0)
+
+
+def _deepseek_proxy():
+    for name in (
+        "LLM_DEEPSEEK_PROXY",
+        "QWEN_DEEPSEEK_PROXY",
+        "OPENAI_PROXY",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
+def _open_deepseek_request(request, timeout_sec, context, proxy):
+    if proxy:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+        return opener.open(request, timeout=timeout_sec)
+    return urllib.request.urlopen(request, timeout=timeout_sec, context=context)
+
+
+def build_llm_failure_reply(user_lang):
+    if user_lang == "en":
+        return "My network is a bit unstable, so I could not reach the language model. Please ask me again."
+    return "小浦这边网络有点慢，刚刚没连上语言模型。你可以再问我一遍。"
+
+
 def post_deepseek_chat_completion(payload):
     api_key = os.environ.get("LLM_DEEPSEEK_API_KEY") or os.environ.get("QWEN_DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
@@ -319,22 +365,37 @@ def post_deepseek_chat_completion(payload):
     context = ssl.create_default_context(cafile=get_certifi_ca_file())
     last_exc = None
     retry_count = _deepseek_retry_count()
+    timeout_sec = _deepseek_request_timeout_sec()
+    proxy = _deepseek_proxy()
+    proxy_label = "set" if proxy else "none"
     for attempt in range(1, retry_count + 1):
+        start = time.monotonic()
         try:
-            with urllib.request.urlopen(request, timeout=CONFIG.request_timeout_sec, context=context) as response:
+            with _open_deepseek_request(request, timeout_sec, context, proxy) as response:
+                elapsed_ms = (time.monotonic() - start) * 1000
+                print(f"DeepSeek API ok attempt={attempt}/{retry_count} elapsed_ms={elapsed_ms:.0f} proxy={proxy_label}", flush=True)
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"DeepSeek API HTTP {exc.code}: {detail}") from exc
         except (urllib.error.URLError, TimeoutError, http.client.IncompleteRead, ssl.SSLError) as exc:
             last_exc = exc
+            elapsed_ms = (time.monotonic() - start) * 1000
             if attempt >= retry_count:
                 break
             delay = _deepseek_retry_delay_sec() * attempt
-            print(f"DeepSeek API transient error on attempt {attempt}/{retry_count}: {exc}; retrying in {delay:.1f}s", flush=True)
+            print(
+                f"DeepSeek API transient error attempt={attempt}/{retry_count} "
+                f"elapsed_ms={elapsed_ms:.0f} timeout_sec={timeout_sec:g} proxy={proxy_label}: {exc}; "
+                f"retrying in {delay:.1f}s",
+                flush=True,
+            )
             if delay:
                 time.sleep(delay)
-    raise RuntimeError(f"DeepSeek API request failed after {retry_count} attempt(s): {last_exc}") from last_exc
+    raise RuntimeError(
+        f"DeepSeek API request failed after {retry_count} attempt(s): "
+        f"timeout_sec={timeout_sec:g} proxy={proxy_label}: {last_exc}"
+    ) from last_exc
 
 
 def infer_deepseek(text, user_lang):
@@ -589,9 +650,17 @@ async def infer(text: str, session_id: str = "default", user_text: str = ""):
         timing = {"rag_embed_sec": 0.0, "rag_search_sec": 0.0, "llm_sec": 0.0, "total_sec": 0.0}
     elif CONFIG.reply_backend == "deepseek":
         session_id = (session_id or "default").strip() or "default"
-        reply = infer_deepseek_with_memory(text, user_lang, session_id)
+        llm_start = time.monotonic()
+        try:
+            reply = infer_deepseek_with_memory(text, user_lang, session_id)
+            llm_error = ""
+        except RuntimeError as exc:
+            llm_error = str(exc)
+            print(f"DeepSeek inference failed; using fallback reply: {llm_error}", flush=True)
+            reply = build_llm_failure_reply(user_lang)
         reply_cleaned = True
-        timing = {"rag_embed_sec": 0.0, "rag_search_sec": 0.0, "llm_sec": 0.0, "total_sec": 0.0}
+        llm_sec = time.monotonic() - llm_start
+        timing = {"rag_embed_sec": 0.0, "rag_search_sec": 0.0, "llm_sec": round(llm_sec, 3), "total_sec": round(llm_sec, 3)}
     elif CONFIG.reply_backend == "local":
         reply = infer_local(text, user_lang)
         timing = {"rag_embed_sec": 0.0, "rag_search_sec": 0.0, "llm_sec": 0.0, "total_sec": 0.0}
@@ -608,9 +677,22 @@ async def infer(text: str, session_id: str = "default", user_text: str = ""):
     reply = _trim_reply_for_brief_mode(reply, user_text or text)
     lang = detect_language(reply, preferred_lang=user_lang)
 
-    await tts(reply, lang)
+    tts_ok, tts_error = await try_tts(reply, lang)
 
-    return {"reply": reply, "action": action, "timing": timing, "lang": lang, "session_id": session_id}
+    response = {
+        "reply": reply,
+        "action": action,
+        "timing": timing,
+        "lang": lang,
+        "session_id": session_id,
+        "tts_ok": tts_ok,
+    }
+    if tts_error:
+        response["tts_error"] = tts_error
+    if CONFIG.reply_backend == "deepseek" and "llm_error" in locals() and llm_error:
+        response["llm_error"] = llm_error
+        response["fallback"] = True
+    return response
 
 
 @app.get("/tts")
