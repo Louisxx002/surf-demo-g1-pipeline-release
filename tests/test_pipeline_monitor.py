@@ -10,11 +10,15 @@ from threading import Thread
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline_monitor.server import (
+    PIPELINE_ENV_DEFAULTS,
+    detect_robot_mic_device,
     event_view,
+    ensure_robot_runtime,
     find_latest_pipeline_log,
     make_handler,
     pipeline_status,
     read_existing_events,
+    robot_mic_status,
     run_pipeline_command,
 )
 from http.server import ThreadingHTTPServer
@@ -142,11 +146,19 @@ class PipelineMonitorTests(unittest.TestCase):
         def fake_relay_checker():
             return {"ready": True, "state": "ready", "endpoint": "192.168.123.164:9999"}
 
-        status = pipeline_status(command_runner=fake_runner, relay_checker=fake_relay_checker)
+        def fake_mic_checker():
+            return {"ready": True, "state": "ready", "endpoint": "192.168.123.225:5556"}
+
+        status = pipeline_status(
+            command_runner=fake_runner,
+            relay_checker=fake_relay_checker,
+            mic_checker=fake_mic_checker,
+        )
 
         self.assertEqual(status["state"], "running")
         self.assertTrue(status["services"]["surf-voice-runtime"]["active"])
         self.assertTrue(status["components"]["robot_relay"]["ready"])
+        self.assertTrue(status["components"]["robot_mic"]["ready"])
 
     def test_pipeline_status_reports_partial_when_robot_relay_is_not_ready(self):
         def fake_runner(command, **kwargs):
@@ -160,7 +172,11 @@ class PipelineMonitorTests(unittest.TestCase):
                 "hint": "cd ~/surf_robot_relay && ./scripts/run_jetson_robot_relay.sh",
             }
 
-        status = pipeline_status(command_runner=fake_runner, relay_checker=fake_relay_checker)
+        status = pipeline_status(
+            command_runner=fake_runner,
+            relay_checker=fake_relay_checker,
+            mic_checker=lambda: {"ready": True, "state": "ready", "endpoint": "192.168.123.225:5556"},
+        )
 
         self.assertEqual(status["state"], "partial")
         self.assertFalse(status["components"]["robot_relay"]["ready"])
@@ -173,16 +189,133 @@ class PipelineMonitorTests(unittest.TestCase):
             calls.append((command, kwargs))
             return type("Result", (), {"returncode": 0, "stdout": "started", "stderr": ""})()
 
-        result = run_pipeline_command("start", command_runner=fake_runner)
+        result = run_pipeline_command(
+            "start",
+            command_runner=fake_runner,
+            robot_runtime_starter=lambda: {"ok": True, "relay_ready": True, "mic_ready": True},
+        )
 
         self.assertTrue(result["ok"])
         self.assertEqual(calls[0][0], ["./scripts/run_pipeline.sh", "--mode", "wake"])
         env = calls[0][1]["env"]
         self.assertEqual(env["UNITREE_BACKEND"], "relay")
+        self.assertEqual(env["VOICE_AUDIO_SOURCE"], "robot")
+        self.assertEqual(env["VOICE_ROBOT_MIC_IF"], "192.168.123.225")
+        self.assertEqual(env["VOICE_ROBOT_MIC_PORT"], "5556")
         self.assertEqual(env["ROBOT_RELAY_HOST"], "192.168.123.164")
         self.assertEqual(env["SURF_LLM_WAKE_LISTEN_SEC"], "15")
         self.assertEqual(env["LLM_FOLLOWUP_TIMEOUT_SEC"], "15")
         self.assertEqual(env["LLM_REQUEST_TIMEOUT_SEC"], "20")
+
+    def test_pipeline_defaults_never_fall_back_to_local_or_direct(self):
+        self.assertEqual(PIPELINE_ENV_DEFAULTS["UNITREE_BACKEND"], "relay")
+        self.assertEqual(PIPELINE_ENV_DEFAULTS["VOICE_AUDIO_SOURCE"], "robot")
+
+    def test_detect_robot_mic_device_tracks_alsa_card_number(self):
+        arecord_output = """\
+card 0: Dongle [Bothlent UAC Dongle], device 0: USB Audio [USB Audio]
+card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
+"""
+
+        self.assertEqual(detect_robot_mic_device(arecord_output), "hw:0,0")
+
+    def test_robot_mic_status_uses_dedicated_ssh_key_and_process_probe(self):
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append((command, kwargs))
+            if command[-1] == "arecord -l":
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "card 0: Dongle [Bothlent UAC Dongle], device 0: USB Audio [USB Audio]\n",
+                        "stderr": "",
+                    },
+                )()
+            return type(
+                "Result",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": "123 python3 stream_usb_mic.py --device hw:0,0 --port 5556\n",
+                    "stderr": "",
+                },
+            )()
+
+        status = robot_mic_status(command_runner=fake_runner)
+
+        self.assertTrue(status["ready"])
+        self.assertIn("surf_robot_ed25519", " ".join(calls[0][0]))
+        self.assertIn("BatchMode=yes", " ".join(calls[0][0]))
+        self.assertEqual(calls[0][0][-1], "arecord -l")
+        self.assertIn("tream_usb_mic.py", calls[1][0][-1])
+        self.assertIn("--device hw:0,0", calls[1][0][-1])
+
+    def test_ensure_robot_runtime_starts_relay_and_external_mic(self):
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append((command, kwargs))
+            if command[-1] == "arecord -l":
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "card 0: Dongle [Bothlent UAC Dongle], device 0: USB Audio [USB Audio]\n",
+                        "stderr": "",
+                    },
+                )()
+            if command[-1].startswith("pgrep -af"):
+                return type("Result", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            return type("Result", (), {"returncode": 0, "stdout": "robot-runtime-ready\n", "stderr": ""})()
+
+        result = ensure_robot_runtime(
+            command_runner=fake_runner,
+            relay_checker=lambda: {"ready": True},
+            mic_checker=lambda: {"ready": True},
+            sleep=lambda _: None,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls[0][0][-1], "arecord -l")
+        cleanup_command = calls[1][0][-1]
+        self.assertIn("pkill -f", cleanup_command)
+        self.assertNotIn("nohup python3", cleanup_command)
+
+        probe_command = calls[2][0][-1]
+        self.assertIn("pgrep -af", probe_command)
+        self.assertIn("--device hw:0,0", probe_command)
+
+        start_command = calls[3][0][-1]
+        self.assertIn("run_jetson_robot_relay.sh", start_command)
+        self.assertIn("stream_usb_mic.py", start_command)
+        self.assertIn("hw:0,0", start_command)
+        self.assertIn("setsid -f", start_command)
+        self.assertNotIn("nohup", start_command)
+        self.assertNotIn("pkill -f", start_command)
+        self.assertIn("--device hw:0,0.*--port 5556", cleanup_command)
+        self.assertIn("192.168.123.225", start_command)
+        self.assertIn("5556", start_command)
+
+    def test_start_does_not_launch_local_pipeline_when_robot_runtime_is_unavailable(self):
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append((command, kwargs))
+            return type("Result", (), {"returncode": 0, "stdout": "started", "stderr": ""})()
+
+        result = run_pipeline_command(
+            "start",
+            command_runner=fake_runner,
+            robot_runtime_starter=lambda: {"ok": False, "error": "ssh key not installed"},
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(calls, [])
+        self.assertIn("ssh key", result["error"])
 
     def test_event_view_maps_session_state_events(self):
         event = event_view(
