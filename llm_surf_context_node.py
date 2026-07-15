@@ -240,6 +240,24 @@ class LlmSurfContextNode(Node):
             )
             return
 
+        if not self.force_always_listen:
+            early_command_text = self.strip_wake_word(user_text)
+            early_terminate_text = early_command_text if early_command_text is not None else user_text
+            if self._is_terminate_command(user_text) or self._is_terminate_command(early_terminate_text):
+                request_session_id = (
+                    self._conversation_session_id
+                    or self._session_id
+                    or session_id
+                    or self._fallback_session_id()
+                )
+                self.get_logger().info(
+                    f"terminate command matched before self-speech guard raw={user_text} "
+                    f"command_text={early_terminate_text} "
+                    f"normalized={self._normalize_command_text(early_terminate_text)}"
+                )
+                self._handle_terminate_command(request_session_id, early_terminate_text)
+                return
+
         self_speech, self_speech_reason = self._self_speech_asr_match(user_text)
         if self_speech:
             was_waiting_for_wake_command = self._wake_listen_waiting()
@@ -282,19 +300,6 @@ class LlmSurfContextNode(Node):
         if not self.force_always_listen:
             command_text = self.strip_wake_word(user_text)
             terminate_text = command_text if command_text is not None else user_text
-            if self._is_terminate_command(user_text) or self._is_terminate_command(terminate_text):
-                request_session_id = (
-                    self._conversation_session_id
-                    or self._session_id
-                    or session_id
-                    or self._fallback_session_id()
-                )
-                self.get_logger().info(
-                    f"terminate command matched raw={user_text} command_text={terminate_text} "
-                    f"normalized={self._normalize_command_text(terminate_text)}"
-                )
-                self._handle_terminate_command(request_session_id, terminate_text)
-                return
             skill_text = terminate_text if command_text is not None else user_text
             skill_context_allowed = (
                 command_text is not None

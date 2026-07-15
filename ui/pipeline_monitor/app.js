@@ -202,7 +202,13 @@ function setSessionStatus(label, className = "") {
 function renderReadiness(payload) {
   if (!readinessList) return;
   const components = payload.components || fallbackReadinessFromServices(payload.services || {});
-  const preferredOrder = ["surf-voice-runtime", "surf-llm-node", "surf-llm-audio-player", "robot_relay"];
+  const preferredOrder = [
+    "surf-voice-runtime",
+    "surf-llm-node",
+    "surf-llm-audio-player",
+    "robot_relay",
+    "robot_mic",
+  ];
   const entries = preferredOrder
     .filter((key) => components[key])
     .map((key) => [key, components[key]]);
@@ -253,6 +259,12 @@ function fallbackReadinessFromServices(services) {
     ready: false,
     state: "unknown",
     hint: "当前 monitor 后端未返回 relay 检查结果，请重启 UI monitor。",
+  };
+  components.robot_mic = {
+    label: "机器人外置麦克风推流",
+    ready: false,
+    state: "unknown",
+    hint: "当前 monitor 后端未返回外置麦克风检查结果，请重启 UI monitor。",
   };
   return components;
 }
