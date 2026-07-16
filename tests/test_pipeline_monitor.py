@@ -329,6 +329,11 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
         self.assertIn("--mode mean4", start_command)
         self.assertIn("--channels 8", start_command)
         self.assertIn("--channel-map 0,1,2,3", start_command)
+        self.assertIn(
+            "setsid -f env PYTHONPATH=/home/unitree/surf_robot_mic /usr/bin/python3",
+            start_command,
+        )
+        self.assertNotIn("setsid -f PYTHONPATH=", start_command)
         self.assertIn("/usr/bin/python3", start_command)
         self.assertNotIn("~/Desktop/stream_usb_mic.py", start_command)
 

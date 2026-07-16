@@ -458,6 +458,7 @@ def ensure_robot_runtime(
     ]
     if not mic_running:
         mic_command = [
+            "env",
             f"PYTHONPATH={ROBOT_MIC_RUNTIME_ROOT}",
             "/usr/bin/python3",
             ROBOT_MIC_SCRIPT,
