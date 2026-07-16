@@ -18,6 +18,7 @@ runtime/*
 logs/
 logs.zip
 release-output/
+beamforming/outputs/
 *.log
 *.wav
 *.mp3
