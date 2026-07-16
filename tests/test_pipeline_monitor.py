@@ -147,7 +147,14 @@ class PipelineMonitorTests(unittest.TestCase):
             return {"ready": True, "state": "ready", "endpoint": "192.168.123.164:9999"}
 
         def fake_mic_checker():
-            return {"ready": True, "state": "ready", "endpoint": "192.168.123.225:5556"}
+            return {
+                "ready": True,
+                "state": "ready",
+                "endpoint": "192.168.123.225:5556",
+                "processing_mode": "mean4",
+                "source_channels": "8",
+                "channel_map": "0,1,2,3",
+            }
 
         status = pipeline_status(
             command_runner=fake_runner,
@@ -159,6 +166,10 @@ class PipelineMonitorTests(unittest.TestCase):
         self.assertTrue(status["services"]["surf-voice-runtime"]["active"])
         self.assertTrue(status["components"]["robot_relay"]["ready"])
         self.assertTrue(status["components"]["robot_mic"]["ready"])
+        self.assertEqual(
+            status["components"]["robot_mic"]["detail"],
+            "mean4 | 8ch | channels 0,1,2,3",
+        )
 
     def test_pipeline_status_reports_partial_when_robot_relay_is_not_ready(self):
         def fake_runner(command, **kwargs):
@@ -206,6 +217,9 @@ class PipelineMonitorTests(unittest.TestCase):
         self.assertEqual(env["SURF_LLM_WAKE_LISTEN_SEC"], "15")
         self.assertEqual(env["LLM_FOLLOWUP_TIMEOUT_SEC"], "15")
         self.assertEqual(env["LLM_REQUEST_TIMEOUT_SEC"], "20")
+        self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_PROCESSING_MODE"], "mean4")
+        self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_SOURCE_CHANNELS"], "8")
+        self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_CHANNEL_MAP"], "0,1,2,3")
 
     def test_pipeline_defaults_never_fall_back_to_local_or_direct(self):
         self.assertEqual(PIPELINE_ENV_DEFAULTS["UNITREE_BACKEND"], "relay")
@@ -239,7 +253,11 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
                 (),
                 {
                     "returncode": 0,
-                    "stdout": "123 python3 stream_usb_mic.py --device hw:0,0 --port 5556\n",
+                    "stdout": (
+                        "123 python3 /home/unitree/surf_robot_mic/tools/stream_usb_mic.py "
+                        "--device hw:0,0 --port 5556 --mode mean4 --channels 8 "
+                        "--channel-map 0,1,2,3\n"
+                    ),
                     "stderr": "",
                 },
             )()
@@ -252,6 +270,10 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
         self.assertEqual(calls[0][0][-1], "arecord -l")
         self.assertIn("tream_usb_mic.py", calls[1][0][-1])
         self.assertIn("--device hw:0,0", calls[1][0][-1])
+        self.assertIn("--mode mean4", calls[1][0][-1])
+        self.assertIn("--channels 8", calls[1][0][-1])
+        self.assertIn("--channel-map 0,1,2,3", calls[1][0][-1])
+        self.assertEqual(status["processing_mode"], "mean4")
 
     def test_ensure_robot_runtime_starts_relay_and_external_mic(self):
         calls = []
@@ -268,6 +290,8 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
                         "stderr": "",
                     },
                 )()
+            if command[-1].startswith("test -r "):
+                return type("Result", (), {"returncode": 0, "stdout": "runtime-ready\n", "stderr": ""})()
             if command[-1].startswith("pgrep -af"):
                 return type("Result", (), {"returncode": 1, "stdout": "", "stderr": ""})()
             return type("Result", (), {"returncode": 0, "stdout": "robot-runtime-ready\n", "stderr": ""})()
@@ -281,15 +305,18 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
 
         self.assertTrue(result["ok"])
         self.assertEqual(calls[0][0][-1], "arecord -l")
-        cleanup_command = calls[1][0][-1]
+        runtime_probe = calls[1][0][-1]
+        self.assertIn("/home/unitree/surf_robot_mic/tools/stream_usb_mic.py", runtime_probe)
+
+        cleanup_command = calls[2][0][-1]
         self.assertIn("pkill -f", cleanup_command)
         self.assertNotIn("nohup python3", cleanup_command)
 
-        probe_command = calls[2][0][-1]
+        probe_command = calls[3][0][-1]
         self.assertIn("pgrep -af", probe_command)
         self.assertIn("--device hw:0,0", probe_command)
 
-        start_command = calls[3][0][-1]
+        start_command = calls[4][0][-1]
         self.assertIn("run_jetson_robot_relay.sh", start_command)
         self.assertIn("stream_usb_mic.py", start_command)
         self.assertIn("hw:0,0", start_command)
@@ -299,6 +326,38 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
         self.assertIn("--device hw:0,0.*--port 5556", cleanup_command)
         self.assertIn("192.168.123.225", start_command)
         self.assertIn("5556", start_command)
+        self.assertIn("--mode mean4", start_command)
+        self.assertIn("--channels 8", start_command)
+        self.assertIn("--channel-map 0,1,2,3", start_command)
+        self.assertIn("/usr/bin/python3", start_command)
+        self.assertNotIn("~/Desktop/stream_usb_mic.py", start_command)
+
+    def test_ensure_robot_runtime_refuses_to_fall_back_when_new_mic_runtime_is_missing(self):
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append((command, kwargs))
+            if command[-1] == "arecord -l":
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "card 2: Dongle [Bothlent UAC Dongle], device 0: USB Audio [USB Audio]\n",
+                        "stderr": "",
+                    },
+                )()
+            return type(
+                "Result",
+                (),
+                {"returncode": 1, "stdout": "", "stderr": "missing runtime"},
+            )()
+
+        result = ensure_robot_runtime(command_runner=fake_runner)
+
+        self.assertFalse(result["ok"])
+        self.assertIn("deploy_robot_mic_runtime.sh", result["error"])
+        self.assertEqual(len(calls), 2)
 
     def test_start_does_not_launch_local_pipeline_when_robot_runtime_is_unavailable(self):
         calls = []

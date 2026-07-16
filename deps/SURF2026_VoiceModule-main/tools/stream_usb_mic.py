@@ -1,17 +1,9 @@
-"""
-stream_usb_mic.py — 在机器人上运行，把 USB 麦克风音频通过 UDP 单播发到电脑。
+"""Stream an 8-channel USB microphone to the computer as mono PCM16 UDP.
 
-用法（在机器人 SSH 终端里）：
-    python3 tools/stream_usb_mic.py
-
-电脑端用 VOICE_ROBOT_MIC_PORT=5556 接收：
-    VOICE_AUDIO_SOURCE=robot VOICE_ROBOT_MIC_PORT=5556 python run_robot.py
-
-查看 USB 麦设备号：
-    arecord -l
-
-如果 USB 麦不是 hw:0,0，用 --device 参数指定：
-    python3 tools/stream_usb_mic.py --device hw:2,0
+The default ``mean4`` mode averages only source channels 0, 1, 2, and 3.
+The optional ``beamformer`` mode applies the supplied fixed spatial filter.
+Both modes preserve the existing downstream wire contract: 16 kHz, mono,
+PCM16, 20 ms (640-byte) UDP packets.
 """
 from __future__ import annotations
 
@@ -19,82 +11,156 @@ import argparse
 import socket
 import subprocess
 import sys
+import time
+from pathlib import Path
 
-DEST_IP   = "192.168.123.222"   # 电脑 IP（eth1 在机器人网段的地址）
-PORT      = 5556                # 避免和原生麦的 5555 冲突
-DEVICE    = "hw:0,0"            # USB 麦默认 ALSA 设备，arecord -l 可查
-RATE      = 16000
-FRAME_MS  = 20
-FRAME_BYTES = int(RATE * FRAME_MS / 1000) * 2  # 640 bytes = 320 samples × 16bit
+
+def _add_runtime_root() -> Path:
+    script_path = Path(__file__).resolve()
+    for parent in script_path.parents:
+        if (parent / "beamforming").is_dir():
+            sys.path.insert(0, str(parent))
+            return parent
+    raise RuntimeError(
+        "beamforming runtime package not found; run scripts/deploy_robot_mic_runtime.sh"
+    )
+
+
+RUNTIME_ROOT = _add_runtime_root()
+
+from beamforming.mic_runtime import (  # noqa: E402
+    build_arecord_stream_command,
+    build_mic_packetizer,
+    parse_channel_indices,
+)
+
+
+DEFAULT_DESTINATION = "192.168.123.225"
+DEFAULT_PORT = 5556
+DEFAULT_DEVICE = "hw:2,0"
+DEFAULT_CHANNELS = 8
+DEFAULT_CHANNEL_MAP = "0,1,2,3"
+DEFAULT_SAMPLE_RATE = 16000
+DEFAULT_INPUT_FRAME_MS = 16
+DEFAULT_OUTPUT_PACKET_MS = 20
+DEFAULT_FILTER = RUNTIME_ROOT / "filters" / "DCF_Targ7_runtime.npz"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="8-channel USB microphone processor and UDP streamer",
+    )
+    parser.add_argument("--device", default=DEFAULT_DEVICE, help="ALSA device")
+    parser.add_argument("--dest", default=DEFAULT_DESTINATION, help="computer IP")
+    parser.add_argument("--port", default=DEFAULT_PORT, type=int)
+    parser.add_argument("--mode", choices=("mean4", "beamformer"), default="mean4")
+    parser.add_argument("--channels", type=int, default=DEFAULT_CHANNELS)
+    parser.add_argument("--channel-map", default=DEFAULT_CHANNEL_MAP)
+    parser.add_argument("--filter", type=Path, default=DEFAULT_FILTER)
+    parser.add_argument("--sample-rate", type=int, default=DEFAULT_SAMPLE_RATE)
+    parser.add_argument("--input-frame-ms", type=int, default=DEFAULT_INPUT_FRAME_MS)
+    parser.add_argument("--packet-ms", type=int, default=DEFAULT_OUTPUT_PACKET_MS)
+    return parser
+
+
+def _probe_capture(command: list[str]) -> None:
+    probe_command = command[:-2] + ["-d", "1", "-q", "/dev/null"]
+    result = subprocess.run(probe_command, capture_output=True)
+    if result.returncode != 0:
+        error = result.stderr.decode(errors="replace").strip()
+        raise RuntimeError(
+            f"ALSA device cannot capture the requested channel layout: {error}"
+        )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="USB 麦克风 UDP 流发送器")
-    parser.add_argument("--device",  default=DEVICE,   help="ALSA 设备（默认 hw:0,0）")
-    parser.add_argument("--dest",    default=DEST_IP,  help="目标 IP（电脑 IP）")
-    parser.add_argument("--port",    default=PORT, type=int, help="目标端口（默认 5556）")
-    args = parser.parse_args()
+    args = build_parser().parse_args()
+    if args.input_frame_ms <= 0:
+        raise SystemExit("--input-frame-ms must be positive")
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    dest = (args.dest, args.port)
+    channel_indices = parse_channel_indices(args.channel_map)
+    filter_path = args.filter if args.mode == "beamformer" else None
+    packetizer = build_mic_packetizer(
+        mode=args.mode,
+        source_channels=args.channels,
+        channel_indices=channel_indices,
+        filter_path=filter_path,
+        sample_rate=args.sample_rate,
+        output_packet_ms=args.packet_ms,
+    )
+    capture_command = build_arecord_stream_command(
+        device=args.device,
+        channels=args.channels,
+        sample_rate=args.sample_rate,
+    )
+    _probe_capture(capture_command)
 
-    # 先尝试单声道，不行自动切双声道混成单声道
-    for ch in (1, 2, 4, 8):
-        test = subprocess.run(
-            ["arecord", "-D", args.device, "-f", "S16_LE", "-r", str(RATE), "-c", str(ch), "-d", "1", "-q", "/dev/null"],
-            capture_output=True,
-        )
-        if test.returncode == 0:
-            channels = ch
-            break
-    else:
-        print("[错误] 设备不支持 1/2/4/8 声道，请检查设备", file=sys.stderr)
-        sys.exit(1)
+    input_samples = args.sample_rate * args.input_frame_ms // 1000
+    input_frame_bytes = input_samples * args.channels * 2
+    if input_samples <= 0:
+        raise SystemExit("input frame duration is too short")
 
-    cmd = [
-        "arecord",
-        "-D", args.device,
-        "-f", "S16_LE",
-        "-r", str(RATE),
-        "-c", str(channels),
-        "-q",
-        "-",
-    ]
+    destination = (args.dest, args.port)
+    print(
+        f"USB mic device={args.device} source={args.channels}ch "
+        f"mode={args.mode} selected={','.join(map(str, channel_indices))}",
+        flush=True,
+    )
+    if args.mode == "beamformer":
+        print(f"beamformer filter={args.filter}", flush=True)
+    print(
+        f"processing={args.input_frame_ms}ms input -> {args.packet_ms}ms mono UDP "
+        f"destination={args.dest}:{args.port}",
+        flush=True,
+    )
+    print("streaming started; Ctrl+C to stop", flush=True)
 
-    # 双声道时每帧字节数翻倍，读进来再混成单声道
-    read_bytes = FRAME_BYTES * channels
-
-    print(f"USB 麦设备: {args.device}  声道: {channels}ch → 单声道输出")
-    print(f"发送到: {args.dest}:{args.port}")
-    print(f"帧大小: {FRAME_BYTES} bytes ({FRAME_MS}ms)")
-    print("开始推流... Ctrl+C 停止\n")
-
-    proc: subprocess.Popen[bytes] | None = None
+    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    process: subprocess.Popen[bytes] | None = None
+    packet_count = 0
+    input_frame_count = 0
+    started_at = time.monotonic()
     try:
-        import numpy as np
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(
+            capture_command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         pending = b""
         while True:
-            assert proc.stdout is not None
-            chunk = proc.stdout.read(read_bytes * 4)
+            assert process.stdout is not None
+            chunk = process.stdout.read(input_frame_bytes)
             if not chunk:
-                err = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
-                print(f"[错误] arecord 退出: {err}", file=sys.stderr)
-                break
+                error = (
+                    process.stderr.read().decode(errors="replace").strip()
+                    if process.stderr
+                    else ""
+                )
+                raise RuntimeError(f"arecord stopped unexpectedly: {error}")
             pending += chunk
-            while len(pending) >= read_bytes:
-                frame_raw = pending[:read_bytes]
-                pending = pending[read_bytes:]
-                if channels > 1:
-                    samples = np.frombuffer(frame_raw, dtype=np.int16).reshape(-1, channels)
-                    frame_raw = samples.mean(axis=1).astype(np.int16).tobytes()
-                sock.sendto(frame_raw, dest)
+            while len(pending) >= input_frame_bytes:
+                frame = pending[:input_frame_bytes]
+                pending = pending[input_frame_bytes:]
+                input_frame_count += 1
+                for packet in packetizer.push_pcm16(frame):
+                    udp_socket.sendto(packet, destination)
+                    packet_count += 1
     except KeyboardInterrupt:
-        print("\n停止。")
+        print("\nstreaming stopped by user", flush=True)
     finally:
-        if proc is not None:
-            proc.terminate()
-        sock.close()
+        if process is not None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        udp_socket.close()
+        elapsed = max(time.monotonic() - started_at, 0.001)
+        print(
+            f"summary input_frames={input_frame_count} udp_packets={packet_count} "
+            f"elapsed_sec={elapsed:.2f}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

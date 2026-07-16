@@ -78,7 +78,7 @@ class SurfVoiceRuntime:
         self._asr_audio_frames: list[bytes] = []
         self._asr_t0 = 0.0
         self._bus = AudioBus()
-        self._vad = VADEngine()
+        self._vad = VADEngine(CONFIG.vad_aggressiveness)
         self._dispatch = WakeupDispatcher()
         self._dispatch.register(self._on_wake)
         if CONFIG.wake_word_lang == "zh":
@@ -143,12 +143,12 @@ class SurfVoiceRuntime:
             if self._followup_session_id and self._followup_until and time.monotonic() > self._followup_until:
                 self._close_followup_window("timeout")
             if self._asr_deadline and time.monotonic() > self._asr_deadline:
-                logger.info("asr deadline reached; forcing transcription")
+                logger.info("asr max recording deadline reached; forcing transcription")
                 self._asr_deadline = 0.0
                 self._recording = False
                 self._save_audio()
                 self._asr.stop_and_transcribe()
-            time.sleep(0.1)
+            time.sleep(max(0.01, CONFIG.followup_control_poll_sec))
 
     def _on_wake(self, word: str) -> None:
         self._close_followup_window("new_wake")
@@ -163,15 +163,16 @@ class SurfVoiceRuntime:
             ),
         )
         bus_snapshot = self._bus.get_buffer()
+        asr_preroll = self._asr_preroll(bus_snapshot)
         self._recording = True
-        self._asr_audio_frames = list(bus_snapshot[-15:])
-        self._asr.start_recording(initial_audio=b"".join(bus_snapshot[-15:]))
+        self._asr_audio_frames = asr_preroll
+        self._asr.start_recording(initial_audio=b"".join(asr_preroll))
         self._vprint.start_capture(initial_audio=b"".join(bus_snapshot))
         self._asr_t0 = time.monotonic()
-        self._asr_deadline = time.monotonic() + CONFIG.asr_window_sec
+        self._arm_asr_max_recording_deadline()
         self._vad_holdoff_until = time.monotonic() + CONFIG.vad_holdoff_sec
         if self._session_log:
-            self._session_log.record("asr_started", asr_window_sec=CONFIG.asr_window_sec)
+            self._session_log.record("asr_started", max_recording_sec=CONFIG.asr_max_recording_sec)
 
     def _on_vad(self, is_speech: bool) -> None:
         logger.info("vad: %s", is_speech)
@@ -182,8 +183,6 @@ class SurfVoiceRuntime:
                 return
             self._start_followup_recording()
             return
-        if is_speech and self._recording:
-            self._cancel_asr_deadline("vad_speech")
         if not is_speech and self._recording and time.monotonic() > self._vad_holdoff_until:
             self._recording = False
             self._asr_deadline = 0.0
@@ -216,8 +215,6 @@ class SurfVoiceRuntime:
 
     def _on_embedding(self, embedding: np.ndarray) -> None:
         self._current_speaker, score = self._speaker_db.identify_with_score(embedding)
-        if self._recording:
-            self._cancel_asr_deadline("speaker_embedding")
         logger.info("speaker: %s score=%.3f", self._current_speaker, score)
         self._sink.publish(
             "/speaker_id",
@@ -236,22 +233,11 @@ class SurfVoiceRuntime:
         if self._recording:
             self._asr_audio_frames.append(pcm)
 
-    def _cancel_asr_deadline(self, reason: str) -> None:
-        if not self._asr_deadline:
-            return
-        if os.environ.get("VOICE_KEEP_ASR_DEADLINE", "").strip().lower() in ("1", "true", "yes", "on"):
-            logger.info("asr deadline kept despite: %s", reason)
-            if self._session_log:
-                self._session_log.record(
-                    "asr_deadline_kept",
-                    reason=reason,
-                    session_id=self._session_id or "default",
-                )
-            return
-        self._asr_deadline = 0.0
-        logger.info("asr deadline cancelled: %s", reason)
-        if self._session_log:
-            self._session_log.record("asr_deadline_cancelled", reason=reason, session_id=self._session_id or "default")
+    def _asr_preroll(self, bus_snapshot: list[bytes]) -> list[bytes]:
+        return list(bus_snapshot[-CONFIG.asr_preroll_frames:])
+
+    def _arm_asr_max_recording_deadline(self) -> None:
+        self._asr_deadline = time.monotonic() + CONFIG.asr_max_recording_sec
 
     def _poll_followup_control(self) -> None:
         if not self._followup_control_path.exists():
@@ -301,6 +287,7 @@ class SurfVoiceRuntime:
             self._close_followup_window("non_positive_timeout")
             return
         self._followup_session_id = session_id
+        self._vad.reset()
         self._followup_until = time.monotonic() + timeout_sec
         logger.info("follow-up window open: session=%s timeout=%.1fs reason=%s", session_id, timeout_sec, reason)
         self._set_wake_light_red("followup_window_open")
@@ -347,19 +334,20 @@ class SurfVoiceRuntime:
         self._session_id = self._session_id or self._followup_session_id
         self._session_log = self._pipeline_logger.attach_session(self._session_id)
         bus_snapshot = self._bus.get_buffer()
+        asr_preroll = self._asr_preroll(bus_snapshot)
         self._recording = True
-        self._asr_audio_frames = list(bus_snapshot[-15:])
-        self._asr.start_recording(initial_audio=b"".join(bus_snapshot[-15:]))
+        self._asr_audio_frames = asr_preroll
+        self._asr.start_recording(initial_audio=b"".join(asr_preroll))
         self._vprint.start_capture(initial_audio=b"".join(bus_snapshot))
         self._asr_t0 = time.monotonic()
-        self._asr_deadline = time.monotonic() + CONFIG.asr_window_sec
+        self._arm_asr_max_recording_deadline()
         self._vad_holdoff_until = time.monotonic() + CONFIG.vad_holdoff_sec
         logger.info("follow-up asr started: session=%s", self._session_id)
         if self._session_log:
             self._session_log.record(
                 "followup_asr_started",
                 session_id=self._session_id,
-                asr_window_sec=CONFIG.asr_window_sec,
+                max_recording_sec=CONFIG.asr_max_recording_sec,
             )
 
     def _is_tts_guard_active(self) -> bool:

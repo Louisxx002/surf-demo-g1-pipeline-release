@@ -55,6 +55,7 @@ class VoiceConfig:
     wakeup_dedup_sec: float     = _env_float("VOICE_WAKEUP_DEDUP_SEC", 0.5)
 
     vad_silence_frames: int     = _env_int("VOICE_VAD_SILENCE_FRAMES", 30)
+    vad_aggressiveness: int     = _env_int("VOICE_VAD_AGGRESSIVENESS", 2)
 
     asr_model: str              = _env(
         "VOICE_ASR_MODEL",
@@ -66,6 +67,9 @@ class VoiceConfig:
         30000,
     )
     asr_window_sec: float       = _env_float("VOICE_ASR_WINDOW_SEC", 8.0)
+    asr_max_recording_sec: float = _env_float("VOICE_ASR_MAX_RECORDING_SEC", 20.0)
+    asr_preroll_frames: int      = _env_int("VOICE_ASR_PREROLL_FRAMES", 15)
+    followup_control_poll_sec: float = _env_float("VOICE_FOLLOWUP_CONTROL_POLL_SEC", 0.02)
 
     voiceprint_capture_sec: float  = _env_float("VOICE_VOICEPRINT_SEC", 3.5)
     voiceprint_model: str          = _env("VOICE_VOICEPRINT_MODEL",

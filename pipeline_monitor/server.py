@@ -5,6 +5,7 @@ import json
 import mimetypes
 import os
 import re
+import shlex
 import subprocess
 import time
 from http import HTTPStatus
@@ -35,6 +36,9 @@ PIPELINE_ENV_DEFAULTS = {
     "VOICE_AUDIO_SOURCE": "robot",
     "VOICE_ROBOT_MIC_IF": "192.168.123.225",
     "VOICE_ROBOT_MIC_PORT": "5556",
+    "ROBOT_MIC_PROCESSING_MODE": "mean4",
+    "ROBOT_MIC_SOURCE_CHANNELS": "8",
+    "ROBOT_MIC_CHANNEL_MAP": "0,1,2,3",
     "LLM_ACTION_EXECUTE": "1",
     "LLM_ROBOT_SKILL_EXECUTE": "1",
     "SURF_LLM_THINKING_ACK_ENABLE": "0",
@@ -48,7 +52,30 @@ PIPELINE_ENV_DEFAULTS = {
 ROBOT_SSH_USER = "unitree"
 ROBOT_SSH_IDENTITY_FILE = Path.home() / ".ssh" / "surf_robot_ed25519"
 ROBOT_MIC_DEVICE_NAME = "Bothlent UAC Dongle"
-ROBOT_MIC_SCRIPT = "~/Desktop/stream_usb_mic.py"
+ROBOT_MIC_RUNTIME_ROOT = "/home/unitree/surf_robot_mic"
+ROBOT_MIC_SCRIPT = f"{ROBOT_MIC_RUNTIME_ROOT}/tools/stream_usb_mic.py"
+ROBOT_MIC_FILTER = f"{ROBOT_MIC_RUNTIME_ROOT}/filters/DCF_Targ7_runtime.npz"
+
+
+def _robot_mic_settings() -> dict[str, str]:
+    mode = os.environ.get("ROBOT_MIC_PROCESSING_MODE", PIPELINE_ENV_DEFAULTS["ROBOT_MIC_PROCESSING_MODE"])
+    channels = os.environ.get("ROBOT_MIC_SOURCE_CHANNELS", PIPELINE_ENV_DEFAULTS["ROBOT_MIC_SOURCE_CHANNELS"])
+    channel_map = os.environ.get("ROBOT_MIC_CHANNEL_MAP", PIPELINE_ENV_DEFAULTS["ROBOT_MIC_CHANNEL_MAP"])
+    if mode not in {"mean4", "beamformer"}:
+        raise ValueError(f"不支持的机器人麦克风处理模式：{mode}")
+    if not channels.isdigit() or int(channels) <= 0:
+        raise ValueError(f"ROBOT_MIC_SOURCE_CHANNELS 必须是正整数：{channels}")
+    if not re.fullmatch(r"\d+(,\d+)*", channel_map):
+        raise ValueError(f"ROBOT_MIC_CHANNEL_MAP 格式错误：{channel_map}")
+    return {"mode": mode, "channels": channels, "channel_map": channel_map}
+
+
+def _robot_mic_process_pattern(mic_device: str, port: str, settings: dict[str, str]) -> str:
+    return (
+        f"[s]tream_usb_mic.py.*--device {re.escape(mic_device)}.*--port {re.escape(port)}"
+        f".*--mode {settings['mode']}.*--channels {settings['channels']}"
+        f".*--channel-map {re.escape(settings['channel_map'])}"
+    )
 
 
 def detect_robot_mic_device(arecord_output: str) -> str | None:
@@ -268,6 +295,7 @@ def robot_mic_status(command_runner: Any = subprocess.run) -> dict[str, Any]:
     port = os.environ.get("VOICE_ROBOT_MIC_PORT") or PIPELINE_ENV_DEFAULTS["VOICE_ROBOT_MIC_PORT"]
     started_at = time.time()
     try:
+        settings = _robot_mic_settings()
         device_result = command_runner(
             _robot_ssh_command("arecord -l"),
             cwd=PROJECT_ROOT,
@@ -289,9 +317,8 @@ def robot_mic_status(command_runner: Any = subprocess.run) -> dict[str, Any]:
                 "hint": f"机器人未识别到外置麦克风 {ROBOT_MIC_DEVICE_NAME}",
             }
 
-        remote_command = (
-            f"pgrep -af '[s]tream_usb_mic.py.*--device {mic_device}.*--port {port}'"
-        )
+        process_pattern = _robot_mic_process_pattern(mic_device, port, settings)
+        remote_command = f"pgrep -af {shlex.quote(process_pattern)}"
         result = command_runner(
             _robot_ssh_command(remote_command),
             cwd=PROJECT_ROOT,
@@ -311,6 +338,9 @@ def robot_mic_status(command_runner: Any = subprocess.run) -> dict[str, Any]:
             "endpoint": f"{destination}:{port}",
             "elapsed_ms": int((time.time() - started_at) * 1000),
             "device": mic_device,
+            "processing_mode": settings["mode"],
+            "source_channels": settings["channels"],
+            "channel_map": settings["channel_map"],
             "process": payload["stdout"],
             "error": payload["stderr"] if not ready else "",
             "hint": "" if ready else hint,
@@ -335,6 +365,10 @@ def ensure_robot_runtime(
     destination = os.environ.get("VOICE_ROBOT_MIC_IF") or PIPELINE_ENV_DEFAULTS["VOICE_ROBOT_MIC_IF"]
     port = os.environ.get("VOICE_ROBOT_MIC_PORT") or PIPELINE_ENV_DEFAULTS["VOICE_ROBOT_MIC_PORT"]
     try:
+        settings = _robot_mic_settings()
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    try:
         device_result = command_runner(
             _robot_ssh_command("arecord -l"),
             cwd=PROJECT_ROOT,
@@ -351,9 +385,31 @@ def ensure_robot_runtime(
         error = device_payload["stderr"] or f"未找到 {ROBOT_MIC_DEVICE_NAME}"
         return {"ok": False, "error": f"机器人外置麦克风不可用：{error}", **device_payload}
 
-    expected_mic_pattern = (
-        f"[s]tream_usb_mic.py.*--device {mic_device}.*--port {port}"
-    )
+    required_paths = [ROBOT_MIC_SCRIPT, f"{ROBOT_MIC_RUNTIME_ROOT}/beamforming/mic_runtime.py"]
+    if settings["mode"] == "beamformer":
+        required_paths.append(ROBOT_MIC_FILTER)
+    runtime_probe_command = " && ".join(
+        f"test -r {shlex.quote(path)}" for path in required_paths
+    ) + " && echo runtime-ready"
+    try:
+        runtime_probe_result = command_runner(
+            _robot_ssh_command(runtime_probe_command),
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"机器人麦克风 runtime 检查失败：{exc}"}
+    runtime_probe_payload = _completed_process_payload(runtime_probe_result)
+    if runtime_probe_payload["returncode"] != 0:
+        return {
+            "ok": False,
+            "error": "机器人缺少新版麦克风 runtime；请先运行 ./scripts/deploy_robot_mic_runtime.sh",
+            **runtime_probe_payload,
+        }
+
+    expected_mic_pattern = _robot_mic_process_pattern(mic_device, port, settings)
     stale_mic_pattern = f"[s]tream_usb_mic.py.*--port {port}"
     cleanup_command = " ".join(
         [
@@ -394,18 +450,36 @@ def ensure_robot_runtime(
     mic_running = probe_payload["returncode"] == 0 and bool(probe_payload["stdout"])
     remote_parts = [
         "set -eu;",
-        "mkdir -p ~/surf_robot_relay/logs;",
+        f"mkdir -p ~/surf_robot_relay/logs {ROBOT_MIC_RUNTIME_ROOT}/logs;",
         "if ! pgrep -f '[j]etson_robot_relay.py' >/dev/null; then",
         "setsid -f ~/surf_robot_relay/scripts/run_jetson_robot_relay.sh",
         "> ~/surf_robot_relay/logs/jetson_robot_relay.log 2>&1 </dev/null;",
         "fi;",
     ]
     if not mic_running:
+        mic_command = [
+            f"PYTHONPATH={ROBOT_MIC_RUNTIME_ROOT}",
+            "/usr/bin/python3",
+            ROBOT_MIC_SCRIPT,
+            "--device",
+            mic_device,
+            "--dest",
+            destination,
+            "--port",
+            port,
+            "--mode",
+            settings["mode"],
+            "--channels",
+            settings["channels"],
+            "--channel-map",
+            settings["channel_map"],
+        ]
+        if settings["mode"] == "beamformer":
+            mic_command.extend(["--filter", ROBOT_MIC_FILTER])
         remote_parts.extend(
             [
-                f"setsid -f python3 {ROBOT_MIC_SCRIPT} --device {mic_device}",
-                f"--dest {destination} --port {port}",
-                "> ~/surf_robot_relay/logs/stream_usb_mic.log 2>&1 </dev/null;",
+                "setsid -f " + " ".join(shlex.quote(part) for part in mic_command),
+                f"> {ROBOT_MIC_RUNTIME_ROOT}/logs/stream_usb_mic.log 2>&1 </dev/null;",
             ]
         )
     remote_parts.append("echo robot-runtime-ready")
@@ -485,6 +559,16 @@ def pipeline_status(
         "elapsed_ms": relay.get("elapsed_ms", ""),
     }
     mic = mic_checker()
+    mic_mode = str(mic.get("processing_mode", ""))
+    mic_channels = str(mic.get("source_channels", ""))
+    mic_channel_map = str(mic.get("channel_map", ""))
+    mic_detail_parts = []
+    if mic_mode:
+        mic_detail_parts.append(mic_mode)
+    if mic_channels:
+        mic_detail_parts.append(f"{mic_channels}ch")
+    if mic_channel_map:
+        mic_detail_parts.append(f"channels {mic_channel_map}")
     components["robot_mic"] = {
         "label": "机器人外置麦克风推流",
         "ready": bool(mic.get("ready")),
@@ -492,6 +576,7 @@ def pipeline_status(
         "endpoint": str(mic.get("endpoint", "")),
         "hint": str(mic.get("hint", "")),
         "elapsed_ms": mic.get("elapsed_ms", ""),
+        "detail": " | ".join(mic_detail_parts),
     }
 
     if active_count == len(PIPELINE_SERVICES) and relay.get("ready") and mic.get("ready"):

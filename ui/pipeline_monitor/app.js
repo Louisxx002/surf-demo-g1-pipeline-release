@@ -230,6 +230,7 @@ function renderReadiness(payload) {
     const parts = [];
     if (component.endpoint) parts.push(component.endpoint);
     if (component.elapsed_ms !== "" && component.elapsed_ms !== undefined) parts.push(`${component.elapsed_ms} ms`);
+    if (component.detail) parts.push(component.detail);
     if (!component.ready && component.hint) parts.push(component.hint);
     detail.textContent = parts.join("  ·  ");
 

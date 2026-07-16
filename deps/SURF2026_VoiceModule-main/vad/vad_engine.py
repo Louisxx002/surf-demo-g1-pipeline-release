@@ -40,6 +40,12 @@ class VADEngine:
         except ValueError:
             pass
 
+    def reset(self) -> None:
+        """Forget residual speech state without emitting a synthetic VAD edge."""
+        self._is_speech = False
+        self._silence_counter = 0
+
+
     def process_frame(self, frame: bytes) -> bool:
         """Process one PCM frame; return confirmed speech state."""
         if len(frame) != CONFIG.frame_bytes:
