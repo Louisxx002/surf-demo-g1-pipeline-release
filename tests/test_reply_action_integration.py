@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 from types import ModuleType
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -43,6 +44,106 @@ def method_source(name: str, next_name: str) -> str:
 
 
 class ReplyActionIntegrationTests(unittest.TestCase):
+    def test_stillness_modifier_does_not_become_robot_stop_skill(self):
+        class FakeNode:
+            _normalize_robot_skill_text = (
+                context_module.LlmSurfContextNode._normalize_robot_skill_text
+            )
+            _is_direct_robot_stop_request = (
+                context_module.LlmSurfContextNode._is_direct_robot_stop_request
+            )
+
+        with patch.object(
+            context_module,
+            "CONFIG",
+            SimpleNamespace(robot_skill_enable=True),
+        ):
+            skill = context_module.LlmSurfContextNode._detect_robot_skill_command(
+                FakeNode(),
+                "不要动，介绍一下学校",
+            )
+
+        self.assertIsNone(skill)
+
+    def test_direct_stop_request_remains_a_robot_skill(self):
+        class FakeNode:
+            _normalize_robot_skill_text = (
+                context_module.LlmSurfContextNode._normalize_robot_skill_text
+            )
+            _is_direct_robot_stop_request = (
+                context_module.LlmSurfContextNode._is_direct_robot_stop_request
+            )
+
+        with patch.object(
+            context_module,
+            "CONFIG",
+            SimpleNamespace(robot_skill_enable=True),
+        ):
+            skill = context_module.LlmSurfContextNode._detect_robot_skill_command(
+                FakeNode(),
+                "小浦，请不要动",
+            )
+
+        self.assertEqual(skill["command"], "stop")
+
+    def test_terminate_ack_queues_one_wave(self):
+        calls = {"tts": [], "waves": []}
+
+        class FakeLogger:
+            def info(self, _message):
+                return None
+
+            def warn(self, _message):
+                return None
+
+        class FakeNode:
+            _wake_state_lock = threading.Lock()
+            _conversation_session_id = "session-1"
+            _followup_until = 1.0
+            _followup_generation = 0
+            awaiting_command_after_wake = True
+            _wake_listen_until = 1.0
+            _wake_command_started = True
+
+            def get_logger(self):
+                return FakeLogger()
+
+            def _update_status(self, **_kwargs):
+                return None
+
+            def _session_record(self, *_args, **_kwargs):
+                return None
+
+            def _write_followup_control_close(self, *_args):
+                return None
+
+            def _set_wake_light_blue(self):
+                return None
+
+            def _prepare_tts_wav(self, kind, text, session_id):
+                calls["tts"].append((kind, text, session_id))
+                return True
+
+            def _queue_terminate_wave(self, text, session_id):
+                calls["waves"].append((text, session_id))
+
+        config = SimpleNamespace(
+            terminate_ack_text="小浦退下了，有问题随时叫小浦。",
+            terminate_ack_text_en="Xiaopu is standing by.",
+        )
+        with patch.object(context_module, "CONFIG", config):
+            context_module.LlmSurfContextNode._handle_terminate_command(
+                FakeNode(),
+                "session-1",
+                "退下吧",
+            )
+
+        self.assertEqual(len(calls["tts"]), 1)
+        self.assertEqual(
+            calls["waves"],
+            [("小浦退下了，有问题随时叫小浦。", "session-1")],
+        )
+
     def test_runtime_classifies_without_executing_then_executes_one_target(self):
         calls = {"classify": [], "execute": [], "log": []}
 

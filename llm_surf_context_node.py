@@ -702,7 +702,9 @@ class LlmSurfContextNode(Node):
         if not ack_text:
             return
         try:
-            self._prepare_tts_wav("system_ack", ack_text, session_id=session_id)
+            tts_ready = self._prepare_tts_wav("system_ack", ack_text, session_id=session_id)
+            if tts_ready:
+                self._queue_terminate_wave(ack_text, session_id)
         except Exception as exc:
             self.get_logger().warn(f"Terminate ack TTS request failed: {exc}")
             self._session_record("terminate_ack_failed", reason=str(exc), session_id=session_id)
@@ -1171,6 +1173,30 @@ class LlmSurfContextNode(Node):
         normalized = (text or "").lower()
         return re.sub(r"[\s，。！？、,.!?;:：；'\"“”‘’\-()（）\[\]{}]", "", normalized)
 
+    def _is_direct_robot_stop_request(self, text: str, keyword: str) -> bool:
+        normalized = self._normalize_robot_skill_text(text)
+        target = self._normalize_robot_skill_text(keyword)
+        if normalized == target:
+            return True
+
+        prefixes = ("小浦", "请", "你", "麻烦", "现在", "马上")
+        suffixes = ("一下", "吧", "好吗", "可以吗")
+        candidate = normalized
+        changed = True
+        while changed:
+            changed = False
+            for prefix in prefixes:
+                if candidate.startswith(prefix):
+                    candidate = candidate[len(prefix):]
+                    changed = True
+                    break
+            for suffix in suffixes:
+                if candidate.endswith(suffix):
+                    candidate = candidate[:-len(suffix)]
+                    changed = True
+                    break
+        return candidate == target
+
     def _detect_robot_skill_command(self, text: str) -> dict[str, str] | None:
         if not CONFIG.robot_skill_enable:
             return None
@@ -1193,6 +1219,8 @@ class LlmSurfContextNode(Node):
             for keyword in keywords:
                 normalized_keyword = self._normalize_robot_skill_text(keyword)
                 if normalized_keyword and normalized_keyword in normalized:
+                    if command == "stop" and not self._is_direct_robot_stop_request(text, keyword):
+                        continue
                     return {
                         "command": command,
                         "text": text,
@@ -1200,6 +1228,51 @@ class LlmSurfContextNode(Node):
                         "matched": keyword,
                     }
         return None
+
+    def _queue_terminate_wave(self, ack_text: str, session_id: str) -> None:
+        if not CONFIG.action_enable or not CONFIG.action_execute:
+            self._session_record(
+                "terminate_wave_skipped",
+                reason="action_disabled",
+                session_id=session_id,
+            )
+            return
+        if not self._action_lock.acquire(blocking=False):
+            self._session_record(
+                "terminate_wave_skipped",
+                reason="action_busy",
+                session_id=session_id,
+            )
+            return
+        threading.Thread(
+            target=self._run_terminate_wave_locked,
+            args=(ack_text, session_id),
+            daemon=True,
+        ).start()
+
+    def _run_terminate_wave_locked(self, ack_text: str, session_id: str) -> None:
+        started_at = time.time()
+        classification = {
+            "text": ack_text,
+            "label": "高位挥手",
+            "official_name": "high wave",
+            "action_id": 26,
+            "score": 1.0,
+            "backend": "terminate_ack",
+            "should_execute": True,
+            "reason": "conversation termination acknowledgement",
+        }
+        try:
+            execution = self._execute_classified_action(classification)
+            self._log_action_result(classification, execution, started_at, ack_text)
+            self._session_record(
+                "terminate_wave",
+                executed=execution.get("executed", False),
+                reason=execution.get("reason", ""),
+                session_id=session_id,
+            )
+        finally:
+            self._action_lock.release()
 
     def _robot_skill_ack_text(self, command: str) -> str:
         if command == "stop":
@@ -2296,6 +2369,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
 
