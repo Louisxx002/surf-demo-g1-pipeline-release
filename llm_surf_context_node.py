@@ -1102,8 +1102,12 @@ class LlmSurfContextNode(Node):
             and len(normalized_asr) >= 8
             and self._contains_cjk(normalized_asr)
             and coverage >= 0.75
+            and longest_ratio >= 0.50
         ):
-            return True, f"tts_coverage_echo:{guard_kind}:coverage={coverage:.2f}:ratio={ratio:.2f}"
+            return True, (
+                f"tts_coverage_echo:{guard_kind}:coverage={coverage:.2f}:"
+                f"longest_ratio={longest_ratio:.2f}:ratio={ratio:.2f}"
+            )
         if high_risk_window and guard_kind == "reply" and len(normalized_asr) >= 8 and longest_ratio >= 0.65:
             return True, f"tts_longest_match_echo:{guard_kind}:longest_ratio={longest_ratio:.2f}:ratio={ratio:.2f}"
         return False, ""
@@ -2369,5 +2373,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
