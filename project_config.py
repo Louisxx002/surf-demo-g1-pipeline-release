@@ -176,7 +176,7 @@ class ProjectConfig:
     tts_guard_enable: bool = _env_bool("LLM_TTS_GUARD_ENABLE", True)
     tts_guard_grace_sec: float = _env_float("LLM_TTS_GUARD_GRACE_SEC", 0.0)
     tts_playback_end_buffer_sec: float = _env_float("LLM_TTS_PLAYBACK_END_BUFFER_SEC", 0.3)
-    self_speech_similarity_threshold: float = _env_float("LLM_SELF_SPEECH_SIMILARITY_THRESHOLD", 0.72)
+    self_speech_similarity_threshold: float = _env_float("LLM_SELF_SPEECH_SIMILARITY_THRESHOLD", 0.90)
 
     model_path: str = _env_compat("LLM_MODEL_PATH", "QWEN_MODEL_PATH", str(DEPS_ROOT / "Qwen3.5-0.8B" / "model"))
     reply_backend: str = _env_compat("LLM_REPLY_BACKEND", "QWEN_REPLY_BACKEND", "local")

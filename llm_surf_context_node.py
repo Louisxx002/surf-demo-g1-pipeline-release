@@ -9,7 +9,6 @@ import subprocess
 import sys
 import threading
 import time
-from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -1008,16 +1007,6 @@ class LlmSurfContextNode(Node):
             return {}
         return payload if isinstance(payload, dict) else {}
 
-    def _char_coverage(self, asr: str, tts: str) -> float:
-        if not asr:
-            return 0.0
-        common = sum((Counter(asr) & Counter(tts)).values())
-        return common / max(1, len(asr))
-
-    @staticmethod
-    def _contains_cjk(text: str) -> bool:
-        return bool(re.search(r"[\u3040-\u30ff\u4e00-\u9fff]", text or ""))
-
     def _self_speech_asr_match(self, user_text: str) -> tuple[bool, str]:
         if not CONFIG.tts_guard_enable:
             return False, ""
@@ -1075,41 +1064,14 @@ class LlmSurfContextNode(Node):
         )
         for prompt_text in followup_prompts:
             followup_prompt = self._normalize_asr_text(prompt_text)
-            if followup_prompt and followup_prompt in normalized_asr and (high_risk_window or guard_kind == "reply"):
+            if followup_prompt and normalized_asr == followup_prompt:
                 return True, "reply_followup_prompt_echo"
 
         if not normalized_tts:
             return False, ""
-        matcher = difflib.SequenceMatcher(None, normalized_asr, normalized_tts)
-        ratio = matcher.ratio()
-        longest = matcher.find_longest_match(
-            0,
-            len(normalized_asr),
-            0,
-            len(normalized_tts),
-        ).size
-        longest_ratio = longest / max(1, len(normalized_asr))
-        coverage = self._char_coverage(normalized_asr, normalized_tts)
+        ratio = difflib.SequenceMatcher(None, normalized_asr, normalized_tts).ratio()
         if high_risk_window and ratio >= CONFIG.self_speech_similarity_threshold:
             return True, f"similar_to_tts:{guard_kind}:ratio={ratio:.2f}"
-        if high_risk_window and len(normalized_asr) >= 6 and normalized_asr in normalized_tts:
-            return True, f"tts_substring_echo:{guard_kind}:ratio={ratio:.2f}"
-        if high_risk_window and len(normalized_tts) >= 6 and normalized_tts in normalized_asr:
-            return True, f"tts_contains_echo:{guard_kind}:ratio={ratio:.2f}"
-        if (
-            high_risk_window
-            and guard_kind == "reply"
-            and len(normalized_asr) >= 8
-            and self._contains_cjk(normalized_asr)
-            and coverage >= 0.75
-            and longest_ratio >= 0.50
-        ):
-            return True, (
-                f"tts_coverage_echo:{guard_kind}:coverage={coverage:.2f}:"
-                f"longest_ratio={longest_ratio:.2f}:ratio={ratio:.2f}"
-            )
-        if high_risk_window and guard_kind == "reply" and len(normalized_asr) >= 8 and longest_ratio >= 0.65:
-            return True, f"tts_longest_match_echo:{guard_kind}:longest_ratio={longest_ratio:.2f}:ratio={ratio:.2f}"
         return False, ""
 
     def _is_self_speech_asr(self, user_text: str) -> bool:
@@ -2373,4 +2335,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
