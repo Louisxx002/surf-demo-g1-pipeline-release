@@ -94,6 +94,23 @@ def _normalize_action(payload: object) -> dict:
     }
 
 
+def _frequent_reply_action_enabled() -> bool:
+    value = os.getenv("LLM_ACTION_FREQUENT_REPLY_ENABLE", "1").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _action_prompt_rules(enabled: bool) -> str:
+    if not enabled:
+        return """- 同时判断这次机器人回复最适合搭配哪个手臂动作。动作只能从动作白名单中选择。
+- 如果回复只是信息说明、查询结果、普通陈述、无法用动作表达、或不适合动，选择“无动作”。"""
+    return """- 同时判断这次机器人回复最适合搭配哪个手臂动作。动作只能从动作白名单中选择。
+- 自我介绍、问候或欢迎优先选择“高位挥手”。
+- 普通讲解、校园信息说明和回答问题优先选择“举右手”。
+- 赞扬或庆祝优先选择“鼓掌”，安慰陪伴优先选择“拥抱”，明确拒绝优先选择“拒绝摆手”。
+- 只有用户明确要求不动、系统错误、会话关闭或确实不适合动作时才选择“无动作”。
+- 不要在 answer 文字中描述动作，动作只放在 action 字段。"""
+
+
 def _limit_answer(answer: str, max_chars: int = ANSWER_MAX_CHARS) -> str:
     answer = answer.strip()
     if max_chars <= 0 or len(answer) <= max_chars:
@@ -489,6 +506,7 @@ async def chat(session_id: str, message: str) -> dict:
     programme_context = _build_programme_context(message, settings.source_db)
     school_overview_context, direct_sources = _build_school_overview_context(message, settings.source_db)
 
+    action_prompt_rules = _action_prompt_rules(_frequent_reply_action_enabled())
     system = f"""
 {IDENTITY_MAP.get(identity, IDENTITY_MAP["校园助手"])}
 
@@ -509,8 +527,7 @@ async def chat(session_id: str, message: str) -> dict:
 - 知识库不足以确认时，明确说“当前知识库没有足够依据”，再给出可核实的建议。
 - 不要编造学费、截止日期、录取要求等高风险信息。
 - 用户画像只用于改善回答，不要暴露内部推断过程。
-- 同时判断这次机器人回复最适合搭配哪个手臂动作。动作只能从动作白名单中选择。
-- 如果回复只是信息说明、查询结果、普通陈述、无法用动作表达、或不适合动，选择“无动作”。
+{action_prompt_rules}
 - 如果用户或回复表达攻击、威胁、伤害、挑衅、打人、消灭、攻击目标等舞台化表达，选择“x-ray”。这里的“x-ray”只是非接触表演动作。
 - 只输出严格 JSON，不要 Markdown，不要额外文字。
 """.strip()

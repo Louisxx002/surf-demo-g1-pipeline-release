@@ -21,6 +21,7 @@ from std_msgs.msg import Bool, String
 
 from pipeline_log.pipeline_logger import PipelineLogger, SessionLog
 from project_config import CONFIG
+from reply_action_policy import is_explicit_action_request, resolve_reply_action
 from text_command_policy import matches_command, normalize_command_text, select_terminate_ack_text
 
 
@@ -1855,36 +1856,74 @@ class LlmSurfContextNode(Node):
         action_payload: dict[str, Any] | None = None,
     ) -> None:
         started_at = time.time()
-        payload: dict[str, Any] | None = None
-        command: list[str] = []
+        deepseek_action: dict[str, Any] | None = None
+        explicit_action: dict[str, Any] | None = None
+        semantic_action: dict[str, Any] | None = None
 
         if action_payload:
-            classification = self._classification_from_deepseek_action(action_payload, reply)
-            execution = self._execute_classified_action(classification)
-            command = self._runner_command(classification.get("action_id"))
-            payload = {"classification": classification, "execution": execution}
+            deepseek_action = self._classification_from_deepseek_action(action_payload, reply)
 
-        if payload is None and CONFIG.action_keyword_first and user_text:
+        if not CONFIG.action_frequent_reply_enable:
+            classification = deepseek_action
+            if classification is None and CONFIG.action_keyword_first and user_text:
+                user_payload = self._run_action_classifier(user_text, "keyword")
+                if user_payload:
+                    user_classification = user_payload.get("classification", {})
+                    if self._int_or_default(user_classification.get("action_id"), -1) >= 0:
+                        classification = user_classification
+            if classification is None and CONFIG.action_backend not in ("deepseek", "none"):
+                legacy_payload = self._run_action_classifier(reply, CONFIG.action_backend)
+                if legacy_payload:
+                    classification = legacy_payload.get("classification", {})
+            if classification is None:
+                classification = self._no_action_classification(reply, "no_deepseek_action")
+            execution = self._execute_classified_action(classification)
+            self._log_action_result(classification, execution, started_at, reply)
+            return
+
+        if (
+            CONFIG.action_keyword_first
+            and user_text
+            and is_explicit_action_request(user_text)
+        ):
             user_payload = self._run_action_classifier(user_text, "keyword")
             if user_payload:
                 user_classification = user_payload.get("classification", {})
                 if self._int_or_default(user_classification.get("action_id"), -1) >= 0:
-                    payload = user_payload
-                    command = self._action_command(user_text, "keyword")
+                    explicit_action = user_classification
 
-        if payload is None and CONFIG.action_backend not in ("deepseek", "none"):
-            payload = self._run_action_classifier(reply, CONFIG.action_backend)
-            command = self._action_command(reply, CONFIG.action_backend)
+        classification = resolve_reply_action(
+            reply=reply,
+            user_text=user_text,
+            deepseek_action=deepseek_action,
+            explicit_action=explicit_action,
+            threshold=CONFIG.action_threshold,
+            frequent_reply_enabled=CONFIG.action_frequent_reply_enable,
+        )
 
-        if payload is None:
-            classification = self._no_action_classification(reply, "no_deepseek_action")
-            execution = {"executed": False, "reason": "no_action_payload"}
-            self._log_action_result(classification, execution, started_at, command, reply)
-            return
+        needs_semantic_fallback = (
+            classification.get("backend") == "reply_info_fallback"
+            or (action_payload is None and CONFIG.action_backend not in ("deepseek", "none"))
+        )
+        if needs_semantic_fallback:
+            semantic_backend = "keyword"
+            if action_payload is None and CONFIG.action_backend not in ("deepseek", "none"):
+                semantic_backend = CONFIG.action_backend
+            semantic_payload = self._run_action_classifier(reply, semantic_backend)
+            if semantic_payload:
+                semantic_action = semantic_payload.get("classification", {})
+                classification = resolve_reply_action(
+                    reply=reply,
+                    user_text=user_text,
+                    deepseek_action=deepseek_action,
+                    explicit_action=explicit_action,
+                    semantic_action=semantic_action,
+                    threshold=CONFIG.action_threshold,
+                    frequent_reply_enabled=CONFIG.action_frequent_reply_enable,
+                )
 
-        classification = payload.get("classification", {})
-        execution = payload.get("execution", {})
-        self._log_action_result(classification, execution, started_at, command, reply)
+        execution = self._execute_classified_action(classification)
+        self._log_action_result(classification, execution, started_at, reply)
 
     def _classification_from_deepseek_action(self, action_payload: dict[str, Any], reply: str) -> dict[str, Any]:
         allowed = {
@@ -2004,23 +2043,8 @@ class LlmSurfContextNode(Node):
         classification: dict[str, Any],
         execution: dict[str, Any],
         started_at: float,
-        command: list[str],
         reply: str,
     ) -> None:
-        if (
-            CONFIG.action_keyword_first
-            and CONFIG.action_backend != "keyword"
-            and classification.get("label") == "无动作"
-            and classification.get("backend") == "qwen"
-        ):
-            keyword_payload = self._run_action_classifier(reply, "keyword")
-            if keyword_payload:
-                keyword_classification = keyword_payload.get("classification", {})
-                keyword_execution = keyword_payload.get("execution", {})
-                if self._int_or_default(keyword_classification.get("action_id"), -1) >= 0:
-                    classification = keyword_classification
-                    execution = keyword_execution
-
         self.get_logger().info(
             "[ACTION] "
             f"label={classification.get('label')} "
@@ -2063,15 +2087,12 @@ class LlmSurfContextNode(Node):
         ):
             self.get_logger().warn("Arm is holding; running release action 99 and retrying once.")
             if self.release_arm():
-                if classification.get("backend") == "deepseek":
-                    retry_execution = self._execute_classified_action(classification)
-                    self.get_logger().info(
-                        "Reply action retry: "
-                        f"{classification.get('label')} id={classification.get('action_id')} "
-                        f"executed={retry_execution.get('executed')} reason={retry_execution.get('reason')}"
-                    )
-                else:
-                    self.retry_reply_action(command)
+                retry_execution = self._execute_classified_action(classification)
+                self.get_logger().info(
+                    "Reply action retry: "
+                    f"{classification.get('label')} id={classification.get('action_id')} "
+                    f"executed={retry_execution.get('executed')} reason={retry_execution.get('reason')}"
+                )
             return
 
         if (
@@ -2109,8 +2130,6 @@ class LlmSurfContextNode(Node):
         ]
         if backend == "qwen" and not CONFIG.action_keyword_first:
             command.append("--no-keyword-first")
-        if CONFIG.action_execute:
-            command.append("--execute")
         return command
 
     def _run_action_classifier(self, reply: str, backend: str) -> dict[str, Any] | None:
@@ -2277,8 +2296,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
 
 
 

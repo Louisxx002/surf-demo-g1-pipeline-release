@@ -218,6 +218,7 @@ class ProjectConfig:
     action_execute: bool = _env_bool_compat("LLM_ACTION_EXECUTE", "QWEN_ACTION_EXECUTE", True)
     action_backend: str = _env_compat("LLM_ACTION_BACKEND", "QWEN_ACTION_BACKEND", "deepseek")
     action_threshold: float = _env_float_compat("LLM_ACTION_THRESHOLD", "QWEN_ACTION_THRESHOLD", 0.8)
+    action_frequent_reply_enable: bool = _env_bool("LLM_ACTION_FREQUENT_REPLY_ENABLE", True)
     action_auto_release: bool = _env_bool_compat("LLM_ACTION_AUTO_RELEASE", "QWEN_ACTION_AUTO_RELEASE", False)
     action_release_after_sec: float = _env_float_compat("LLM_ACTION_RELEASE_AFTER_SEC", "QWEN_ACTION_RELEASE_AFTER_SEC", 0.0)
     action_keyword_first: bool = _env_bool_compat("LLM_ACTION_KEYWORD_FIRST", "QWEN_ACTION_KEYWORD_FIRST", True)
@@ -271,4 +272,3 @@ class ProjectConfig:
 
 
 CONFIG = ProjectConfig()
-
