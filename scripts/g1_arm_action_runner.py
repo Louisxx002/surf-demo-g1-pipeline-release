@@ -38,6 +38,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--network", required=True, help="DDS network interface, e.g. eth1.")
     parser.add_argument("--id", required=True, type=int, help="Official G1 arm action id.")
     parser.add_argument("--timeout", default=10.0, type=float, help="Unitree RPC timeout in seconds.")
+    parser.add_argument("--generation", default=None, type=int, help="Interrupt generation for relay ordering.")
     parser.add_argument(
         "--release_after_sec",
         default=0.0,
@@ -108,7 +109,11 @@ def _run_via_relay(args: argparse.Namespace, action_name: str) -> int:
         flush=True,
     )
     try:
-        response = client.run_arm_action(args.id, release_after_sec=args.release_after_sec)
+        response = client.run_arm_action(
+            args.id,
+            release_after_sec=args.release_after_sec,
+            generation=args.generation,
+        )
     except RobotRelayError as exc:
         print(f"g1_arm_action relay failed: {exc}", file=sys.stderr, flush=True)
         return 3

@@ -311,8 +311,18 @@ button {
 }
 
 button:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: 0.56;
+}
+
+.interrupt-command {
+  border-color: color-mix(in srgb, var(--llm) 55%, var(--line));
+  color: var(--llm);
+  font-weight: 650;
+}
+
+.interrupt-command:not(:disabled):hover {
+  background: color-mix(in srgb, var(--llm) 12%, var(--panel-2));
 }
 
 #eventsList {

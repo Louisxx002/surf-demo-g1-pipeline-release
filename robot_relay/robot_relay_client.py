@@ -43,26 +43,45 @@ class RobotRelayClient:
             }
         )
 
-    def play_wav(self, path: str, stream: str = "tts") -> dict[str, Any]:
+    def play_wav(self, path: str, stream: str = "tts", generation: int | None = None) -> dict[str, Any]:
         wav_path = Path(path)
         wav_bytes = wav_path.read_bytes()
-        return self.request(
-            {
-                "command": "play_wav",
-                "filename": wav_path.name,
-                "stream": stream,
-                "wav_b64": base64.b64encode(wav_bytes).decode("ascii"),
-            }
-        )
+        payload = {
+            "command": "play_wav",
+            "filename": wav_path.name,
+            "stream": stream,
+            "wav_b64": base64.b64encode(wav_bytes).decode("ascii"),
+        }
+        if generation is not None:
+            payload["generation"] = int(generation)
+        return self.request(payload)
 
-    def run_arm_action(self, action_id: int, release_after_sec: float = 0.0) -> dict[str, Any]:
-        return self.request(
-            {
-                "command": "arm_action",
-                "id": int(action_id),
-                "release_after_sec": float(release_after_sec),
-            }
-        )
+    def run_arm_action(
+        self,
+        action_id: int,
+        release_after_sec: float = 0.0,
+        generation: int | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "command": "arm_action",
+            "id": int(action_id),
+            "release_after_sec": float(release_after_sec),
+        }
+        if generation is not None:
+            payload["generation"] = int(generation)
+        return self.request(payload)
+
+    def stop_audio(self, app_name: str = "tts", generation: int | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"command": "stop_audio", "app_name": str(app_name)}
+        if generation is not None:
+            payload["generation"] = int(generation)
+        return self.request(payload)
+
+    def release_arm(self, generation: int | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"command": "release_arm"}
+        if generation is not None:
+            payload["generation"] = int(generation)
+        return self.request(payload)
 
     def request(self, payload: dict[str, Any]) -> dict[str, Any]:
         command = str(payload.get("command", "unknown"))

@@ -8,6 +8,7 @@ import re
 import shlex
 import subprocess
 import time
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any, Iterable
 from urllib.parse import parse_qs, urlparse
 
 from pipeline_log.latency_tracker import read_turn_summaries
+from pipeline_control.interrupt import InterruptControl
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -205,6 +207,15 @@ def event_view(entry: dict[str, Any]) -> dict[str, Any]:
         title = "SESSION"
         message = "用户主动关闭当前会话"
         meta = _compact_meta(entry, ("session_id",))
+    elif stage == "manual_interrupt":
+        listening_opened = bool(entry.get("listening_opened"))
+        kind = "state" if listening_opened else "error"
+        title = "INTERRUPT" if listening_opened else "INTERRUPT_FAILED"
+        message = "已打断，正在听取" if listening_opened else "打断未完成"
+        meta = _compact_meta(
+            entry,
+            ("generation", "request_id", "partial", "listening_opened", "errors", "session_id"),
+        )
     elif stage == "followup_closed":
         kind = "state"
         title = "SESSION"
@@ -633,6 +644,134 @@ def run_pipeline_command(
     return payload
 
 
+def _pipeline_services_running(command_runner: Any = subprocess.run) -> bool:
+    for service in PIPELINE_SERVICES:
+        result = command_runner(
+            ["systemctl", "--user", "is-active", service],
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+        if str(getattr(result, "stdout", "") or "").strip() != "active":
+            return False
+    return True
+
+
+def _make_robot_relay_client() -> Any:
+    from robot_relay.robot_relay_client import RobotRelayClient
+
+    host = os.environ.get("ROBOT_RELAY_HOST") or PIPELINE_ENV_DEFAULTS["ROBOT_RELAY_HOST"]
+    port = int(os.environ.get("ROBOT_RELAY_PORT") or PIPELINE_ENV_DEFAULTS["ROBOT_RELAY_PORT"])
+    timeout_sec = float(
+        os.environ.get("ROBOT_RELAY_TIMEOUT_SEC") or PIPELINE_ENV_DEFAULTS["ROBOT_RELAY_TIMEOUT_SEC"]
+    )
+    return RobotRelayClient(host, port, timeout_sec=timeout_sec)
+
+
+def run_pipeline_interrupt(
+    logs_dir: Path = DEFAULT_LOGS_DIR,
+    pipeline_running_checker: Any = _pipeline_services_running,
+    relay_client_factory: Any = _make_robot_relay_client,
+    interrupt_control: InterruptControl | None = None,
+    followup_timeout_sec: float | None = None,
+) -> dict[str, Any]:
+    if not pipeline_running_checker():
+        return {"ok": False, "partial": False, "error": "pipeline_not_running"}
+
+    latest_log = find_latest_pipeline_log(logs_dir)
+    session_id = latest_log.parent.name if latest_log is not None else ""
+    timeout_sec = float(
+        followup_timeout_sec
+        if followup_timeout_sec is not None
+        else os.environ.get("LLM_FOLLOWUP_TIMEOUT_SEC", PIPELINE_ENV_DEFAULTS["LLM_FOLLOWUP_TIMEOUT_SEC"])
+    )
+    control = interrupt_control or InterruptControl(PROJECT_ROOT / "runtime")
+    errors: list[str] = []
+    stop_audio: dict[str, Any] | None = None
+    release_arm: dict[str, Any] | None = None
+
+    # Invalidate in-flight LLM/TTS/action work before waiting on robot RPCs.
+    # This closes the race where a slow relay response lets stale work land.
+    try:
+        command = control.begin(session_id=session_id)
+    except Exception as exc:
+        return {"ok": False, "partial": False, "error": f"interrupt_begin: {exc}"}
+
+    generation = int(command["generation"])
+    listening_opened = False
+    try:
+        relay = relay_client_factory()
+    except Exception as exc:
+        relay = None
+        errors.append(f"relay_client: {exc}")
+
+    try:
+        if relay is None:
+            raise RuntimeError("relay client unavailable")
+        stop_audio = relay.stop_audio("tts", generation=generation)
+        if not isinstance(stop_audio, dict):
+            errors.append("stop_audio returned an invalid response")
+        elif int(stop_audio.get("ret", -1)) != 0:
+            errors.append(f"stop_audio returned ret={stop_audio.get('ret', 'missing')}")
+    except Exception as exc:
+        errors.append(f"stop_audio: {exc}")
+
+    try:
+        if relay is None:
+            raise RuntimeError("relay client unavailable")
+        release_arm = relay.release_arm(generation=generation)
+        if not isinstance(release_arm, dict):
+            errors.append("release_arm returned an invalid response")
+        elif int(release_arm.get("ret", -1)) != 0:
+            errors.append(f"release_arm returned ret={release_arm.get('ret', 'missing')}")
+    except Exception as exc:
+        errors.append(f"release_arm: {exc}")
+
+    stop_succeeded = isinstance(stop_audio, dict) and int(stop_audio.get("ret", -1)) == 0
+    release_succeeded = isinstance(release_arm, dict) and int(release_arm.get("ret", -1)) == 0
+    if stop_succeeded and release_succeeded:
+        try:
+            control.open_listening(command, followup_timeout_sec=timeout_sec)
+            listening_opened = True
+        except Exception as exc:
+            errors.append(f"open_listening: {exc}")
+
+    partial = bool(errors)
+    if latest_log is not None:
+        event = {
+            "time": datetime.now().isoformat(timespec="milliseconds"),
+            "stage": "manual_interrupt",
+            "session_id": session_id,
+            "request_id": command["request_id"],
+            "generation": command["generation"],
+            "partial": partial,
+            "listening_opened": listening_opened,
+            "errors": errors,
+        }
+        with latest_log.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    return {
+        "ok": not errors,
+        "partial": partial,
+        "message": (
+            "已打断，正在听取"
+            if listening_opened and not partial
+            else "打断未完成：动作未安全释放"
+            if stop_succeeded and not release_succeeded
+            else "打断未完成：机器人停音失败"
+        ),
+        "session_id": session_id,
+        "request_id": command["request_id"],
+        "generation": command["generation"],
+        "listening_opened": listening_opened,
+        "stop_audio": stop_audio,
+        "release_arm": release_arm,
+        "errors": errors,
+    }
+
+
 def _json_response(handler: BaseHTTPRequestHandler, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
@@ -678,6 +817,8 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                 self._run_pipeline_action("start")
             elif parsed.path == "/api/pipeline/stop":
                 self._run_pipeline_action("stop")
+            elif parsed.path == "/api/pipeline/interrupt":
+                self._run_pipeline_interrupt()
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -756,6 +897,23 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                 _json_response(self, payload, status)
             except Exception as exc:  # pragma: no cover - defensive UI endpoint
                 _json_response(self, {"ok": False, "action": action, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+        def _run_pipeline_interrupt(self) -> None:
+            try:
+                payload = run_pipeline_interrupt(logs_dir=logs_dir)
+                if payload.get("error") == "pipeline_not_running":
+                    status = HTTPStatus.CONFLICT
+                elif payload.get("ok") or payload.get("partial"):
+                    status = HTTPStatus.OK
+                else:
+                    status = HTTPStatus.INTERNAL_SERVER_ERROR
+                _json_response(self, payload, status)
+            except Exception as exc:  # pragma: no cover - defensive UI endpoint
+                _json_response(
+                    self,
+                    {"ok": False, "partial": False, "error": str(exc)},
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
 
         def _serve_sse(self) -> None:
             self.send_response(HTTPStatus.OK)

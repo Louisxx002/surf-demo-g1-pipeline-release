@@ -6,11 +6,13 @@ from pathlib import Path
 import threading
 import time
 
+from pipeline_control.interrupt import InterruptControl
 from pipeline_log.pipeline_logger import PipelineLogger
 from project_config import CONFIG
 
 CONFIG.runtime_dir.mkdir(parents=True, exist_ok=True)
 _pipeline_logger = PipelineLogger()
+_interrupt_control = InterruptControl(CONFIG.runtime_dir)
 _current_session = None
 _light_lock = threading.Lock()
 _light_state = {"color": "idle", "red": 0, "green": 0, "blue": 0, "effect": "solid"}
@@ -34,7 +36,13 @@ class DirectUnitreeBackend:
     def led_control(self, red: int, green: int, blue: int) -> object:
         return self.audio_client.LedControl(red, green, blue)
 
-    def play(self, wav_path: Path, text: str, stream_name: str = "tts") -> bool:
+    def play(
+        self,
+        wav_path: Path,
+        text: str,
+        stream_name: str = "tts",
+        generation: int | None = None,
+    ) -> bool:
         pcm_list, _sample_rate, _num_channels, is_ok = read_wav(str(wav_path))
         if not is_ok:
             return False
@@ -58,10 +66,16 @@ class RelayUnitreeBackend:
         response = self.client.set_light(red, green, blue)
         return response.get("ret", 0)
 
-    def play(self, wav_path: Path, text: str, stream_name: str = "tts") -> bool:
-        response = self.client.play_wav(str(wav_path), stream_name)
+    def play(
+        self,
+        wav_path: Path,
+        text: str,
+        stream_name: str = "tts",
+        generation: int | None = None,
+    ) -> bool:
+        response = self.client.play_wav(str(wav_path), stream_name, generation=generation)
         print(f"relay played wav stream={stream_name}: {response}", flush=True)
-        return True
+        return int(response.get("ret", -1)) == 0 and not bool(response.get("cancelled", False))
 
 
 def _create_backend():
@@ -261,6 +275,7 @@ while True:
     play_session_id = ""
     play_text = ""
     play_context_updated_at = 0.0
+    play_generation = _interrupt_control.current_generation()
     if CONFIG.tts_play_context_path.exists():
         current_play_context_mtime = CONFIG.tts_play_context_path.stat().st_mtime
         if current_play_context_mtime != last_play_context_mtime:
@@ -274,6 +289,12 @@ while True:
                 play_context_updated_at = float(payload.get("updated_at", 0.0))
             except (TypeError, ValueError):
                 play_context_updated_at = 0.0
+            try:
+                context_generation = payload.get("generation")
+                if context_generation is not None:
+                    play_generation = int(context_generation)
+            except (TypeError, ValueError):
+                play_generation = _interrupt_control.current_generation()
         except Exception:
             play_kind = "reply"
             play_context_updated_at = 0.0
@@ -300,6 +321,18 @@ while True:
                 time.sleep(0.2)
                 continue
             _remember_play_id(play_id)
+            if _interrupt_control.generation_changed(play_generation):
+                print(
+                    f"stale tts playback skipped generation={play_generation} kind={play_kind}",
+                    flush=True,
+                )
+                if play_session_id:
+                    _pipeline_logger.attach_session(play_session_id).record(
+                        "tts_play_interrupted",
+                        kind=play_kind,
+                        reason="stale_before_play",
+                    )
+                continue
 
             play_started_at = time.time()
             wav_duration_sec = _wav_duration_sec(CONFIG.tts_wav_path)
@@ -324,50 +357,107 @@ while True:
                     print("reply playback started -> blue", flush=True)
 
             _write_tts_guard(True, play_kind, play_text, play_session_id)
+            playback_error_recorded = False
             try:
-                played = audio_backend.play(CONFIG.tts_wav_path, play_text, "tts")
+                if _interrupt_control.generation_changed(play_generation):
+                    print(
+                        f"stale tts playback skipped immediately before backend generation={play_generation}",
+                        flush=True,
+                    )
+                    played = False
+                else:
+                    played = audio_backend.play(
+                        CONFIG.tts_wav_path,
+                        play_text,
+                        "tts",
+                        generation=play_generation,
+                    )
                 if played:
                     print("played audio", flush=True)
                 else:
                     print("audio playback skipped or failed", flush=True)
-            finally:
-                remaining = safe_audio_end_at - time.time()
-                if remaining > 0:
-                    print(f"waiting for estimated audio end remaining={remaining:.2f}s", flush=True)
-                    time.sleep(remaining)
-                ended_at = time.time()
-                guard_until = ended_at + CONFIG.tts_guard_grace_sec
-                _write_tts_guard(
-                    False,
-                    play_kind,
-                    play_text,
-                    play_session_id,
-                    extra_fields={
-                        "ended_at": ended_at,
-                        "wav_duration_sec": wav_duration_sec,
-                        "estimated_audio_end_at": estimated_audio_end_at,
-                        "safe_audio_end_at": safe_audio_end_at,
-                        "guard_until": guard_until,
-                        "updated_at": ended_at,
-                    },
-                )
+            except Exception as exc:
+                played = False
+                interrupted_by_generation = _interrupt_control.generation_changed(play_generation)
+                print(f"relay playback rejected or failed: {exc}", flush=True)
                 if play_session_id and _current_session is not None:
                     _current_session.record(
-                        "tts_play_finished",
+                        "tts_play_interrupted" if interrupted_by_generation else "tts_play_failed",
                         kind=play_kind,
                         text=play_text,
                         wav=str(CONFIG.tts_wav_path),
+                        error=str(exc),
                     )
-                if play_kind not in NON_REPLY_KINDS:
-                    remaining_guard = guard_until - time.time()
-                    if remaining_guard > 0:
-                        print(
-                            f"waiting tts guard grace before follow-up open remaining={remaining_guard:.2f}s",
-                            flush=True,
+                    playback_error_recorded = True
+            finally:
+                if not played:
+                    ended_at = time.time()
+                    _write_tts_guard(
+                        False,
+                        play_kind,
+                        play_text,
+                        play_session_id,
+                        extra_fields={
+                            "ended_at": ended_at,
+                            "guard_until": ended_at,
+                            "updated_at": ended_at,
+                        },
+                    )
+                    interrupted_by_generation = _interrupt_control.generation_changed(play_generation)
+                    if (
+                        interrupted_by_generation
+                        and not playback_error_recorded
+                        and play_session_id
+                        and _current_session is not None
+                    ):
+                        _current_session.record(
+                            "tts_play_interrupted",
+                            kind=play_kind,
+                            text=play_text,
+                            wav=str(CONFIG.tts_wav_path),
                         )
-                        time.sleep(remaining_guard)
-                    _set_light("blue", 0, 0, 255)
-                    print("reply playback finished -> blue", flush=True)
-                    _write_followup_control(play_session_id, "reply_play_finished")
+                elif not _interrupt_control.wait_until(safe_audio_end_at, play_generation):
+                    print(
+                        f"tts playback interrupted generation={play_generation} kind={play_kind}",
+                        flush=True,
+                    )
+                    if play_session_id and _current_session is not None:
+                        _current_session.record(
+                            "tts_play_interrupted",
+                            kind=play_kind,
+                            text=play_text,
+                            wav=str(CONFIG.tts_wav_path),
+                        )
+                else:
+                    ended_at = time.time()
+                    guard_until = ended_at + CONFIG.tts_guard_grace_sec
+                    _write_tts_guard(
+                        False,
+                        play_kind,
+                        play_text,
+                        play_session_id,
+                        extra_fields={
+                            "ended_at": ended_at,
+                            "wav_duration_sec": wav_duration_sec,
+                            "estimated_audio_end_at": estimated_audio_end_at,
+                            "safe_audio_end_at": safe_audio_end_at,
+                            "guard_until": guard_until,
+                            "updated_at": ended_at,
+                        },
+                    )
+                    if play_session_id and _current_session is not None:
+                        _current_session.record(
+                            "tts_play_finished",
+                            kind=play_kind,
+                            text=play_text,
+                            wav=str(CONFIG.tts_wav_path),
+                        )
+                    if play_kind not in NON_REPLY_KINDS:
+                        if _interrupt_control.wait_until(guard_until, play_generation):
+                            _set_light("blue", 0, 0, 255)
+                            print("reply playback finished -> blue", flush=True)
+                            _write_followup_control(play_session_id, "reply_play_finished")
+                        else:
+                            print("tts guard grace interrupted; keeping manual follow-up state", flush=True)
 
     time.sleep(0.2)  # 降低CPU占用

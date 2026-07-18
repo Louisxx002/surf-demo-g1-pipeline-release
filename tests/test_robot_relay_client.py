@@ -96,13 +96,14 @@ def test_play_wav_sends_file_bytes_as_base64(monkeypatch, tmp_path):
     monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: fake)
 
     client = RobotRelayClient("robot.local", 9999)
-    response = client.play_wav(str(wav_path), stream="tts")
+    response = client.play_wav(str(wav_path), stream="tts", generation=7)
 
     payload = json.loads(fake.sent.decode("utf-8"))
     assert payload == {
         "command": "play_wav",
         "filename": "reply.wav",
         "stream": "tts",
+        "generation": 7,
         "wav_b64": base64.b64encode(wav_bytes).decode("ascii"),
     }
     assert response["ret"] == 0
@@ -113,11 +114,38 @@ def test_run_arm_action_sends_action_id(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: fake)
 
     client = RobotRelayClient("robot.local", 9999)
-    response = client.run_arm_action(25, release_after_sec=0.5)
+    response = client.run_arm_action(25, release_after_sec=0.5, generation=7)
 
     assert json.loads(fake.sent.decode("utf-8")) == {
         "command": "arm_action",
         "id": 25,
         "release_after_sec": 0.5,
+        "generation": 7,
     }
+    assert response["ret"] == 0
+
+
+def test_stop_audio_sends_stream_app_name(monkeypatch):
+    fake = FakeSocket(b'{"ok":true,"command":"stop_audio","ret":0}\n')
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: fake)
+
+    client = RobotRelayClient("robot.local", 9999)
+    response = client.stop_audio("tts", generation=8)
+
+    assert json.loads(fake.sent.decode("utf-8")) == {
+        "command": "stop_audio",
+        "app_name": "tts",
+        "generation": 8,
+    }
+    assert response["ret"] == 0
+
+
+def test_release_arm_uses_dedicated_relay_command(monkeypatch):
+    fake = FakeSocket(b'{"ok":true,"command":"release_arm","ret":0}\n')
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: fake)
+
+    client = RobotRelayClient("robot.local", 9999)
+    response = client.release_arm(generation=8)
+
+    assert json.loads(fake.sent.decode("utf-8")) == {"command": "release_arm", "generation": 8}
     assert response["ret"] == 0

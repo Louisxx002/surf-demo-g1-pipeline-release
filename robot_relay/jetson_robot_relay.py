@@ -51,6 +51,10 @@ class JetsonRobotRelay:
         self.arm_action = G1ArmActionClient()
         self.arm_action.SetTimeout(TIMEOUT)
         self.arm_action.Init()
+        self._stream_lock = threading.RLock()
+        self._action_lock = threading.RLock()
+        self._minimum_play_generation = 0
+        self._minimum_action_generation = 0
         print("[relay] G1ArmActionClient ready", flush=True)
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -78,9 +82,12 @@ class JetsonRobotRelay:
                 stream = str(request.get("stream", "tts"))
                 if not wav_b64:
                     return self._error(command, started, "missing wav_b64")
+                generation = self._request_generation(request)
+                if not self._stream_is_current(generation):
+                    return self._error(command, started, "stale audio generation", generation=generation)
                 wav_bytes = base64.b64decode(wav_b64.encode("ascii"))
                 pcm_bytes, sample_rate, num_channels = _read_wav_pcm(wav_bytes)
-                chunks, ret = _play_pcm_stream(self.audio, pcm_bytes, stream)
+                chunks, ret, cancelled = self._play_pcm_stream(pcm_bytes, stream, generation)
                 return self._ok(
                     command,
                     started,
@@ -90,18 +97,62 @@ class JetsonRobotRelay:
                     sample_rate=sample_rate,
                     num_channels=num_channels,
                     chunks=chunks,
+                    generation=generation,
+                    cancelled=cancelled,
+                )
+            if command == "stop_audio":
+                app_name = str(request.get("app_name", "tts")).strip() or "tts"
+                generation = self._request_generation(request)
+                with self._stream_lock:
+                    if generation is not None:
+                        if generation < self._minimum_play_generation:
+                            return self._error(
+                                command,
+                                started,
+                                "stale stop audio generation",
+                                generation=generation,
+                            )
+                        self._minimum_play_generation = generation
+                    ret = self.audio.PlayStop(app_name)
+                return self._ok(command, started, ret=ret, app_name=app_name, generation=generation)
+            if command == "release_arm":
+                generation = self._request_generation(request)
+                with self._action_lock:
+                    if generation is not None:
+                        if generation < self._minimum_action_generation:
+                            return self._error(
+                                command,
+                                started,
+                                "stale release arm generation",
+                                generation=generation,
+                            )
+                        self._minimum_action_generation = generation
+                    ret = self.arm_action.ExecuteAction(action_map["release arm"])
+                return self._ok(
+                    command,
+                    started,
+                    ret=ret,
+                    action_id=action_map["release arm"],
+                    action_name="release arm",
+                    generation=generation,
                 )
             if command == "arm_action":
                 action_id = int(request.get("id", -1))
                 action_name = ACTION_ID_TO_NAME.get(action_id)
                 if action_name is None:
                     return self._error(command, started, f"unknown action id: {action_id}")
+                generation = self._request_generation(request)
                 release_after_sec = float(request.get("release_after_sec", 0.0))
-                ret = self.arm_action.ExecuteAction(action_id)
+                with self._action_lock:
+                    if not self._action_is_current(generation):
+                        return self._error(command, started, "stale action generation", generation=generation)
+                    ret = self.arm_action.ExecuteAction(action_id)
                 release_ret = None
                 if ret == 0 and release_after_sec > 0 and action_id != action_map["release arm"]:
                     time.sleep(release_after_sec)
-                    release_ret = self.arm_action.ExecuteAction(action_map["release arm"])
+                    with self._action_lock:
+                        if self._action_is_current(generation):
+                            release_ret = self.arm_action.ExecuteAction(action_map["release arm"])
                 return self._ok(
                     command,
                     started,
@@ -109,10 +160,50 @@ class JetsonRobotRelay:
                     action_id=action_id,
                     action_name=action_name,
                     release_ret=release_ret,
+                    generation=generation,
                 )
             return self._error(command, started, f"unknown command: {command}")
         except Exception as exc:
             return self._error(command, started, repr(exc))
+
+    @staticmethod
+    def _request_generation(request: dict[str, Any]) -> int | None:
+        value = request.get("generation")
+        if value is None:
+            return None
+        return max(0, int(value))
+
+    def _stream_is_current(self, generation: int | None) -> bool:
+        return generation is None or generation >= self._minimum_play_generation
+
+    def _action_is_current(self, generation: int | None) -> bool:
+        return generation is None or generation >= self._minimum_action_generation
+
+    def _play_pcm_stream(
+        self,
+        pcm_data: bytes,
+        stream_name: str,
+        generation: int | None,
+        chunk_size: int = 96000,
+    ) -> tuple[int, int, bool]:
+        stream_id = str(int(time.time() * 1000))
+        offset = 0
+        chunk_index = 0
+        last_ret = 0
+        while offset < len(pcm_data):
+            chunk = pcm_data[offset : offset + chunk_size]
+            with self._stream_lock:
+                if not self._stream_is_current(generation):
+                    return chunk_index, last_ret, True
+                ret_code, _ = self.audio.PlayStream(stream_name, stream_id, chunk)
+            last_ret = ret_code
+            if ret_code != 0:
+                print(f"[relay] PlayStream failed chunk={chunk_index} ret={ret_code}", flush=True)
+                return chunk_index, ret_code, False
+            offset += len(chunk)
+            chunk_index += 1
+            time.sleep(0.05)
+        return chunk_index, last_ret, False
 
     @staticmethod
     def _ok(command: str, started: float, **fields: Any) -> dict[str, Any]:
@@ -214,24 +305,6 @@ def _read_wav_pcm(wav_bytes: bytes) -> tuple[bytes, int, int]:
     if not sample_rate or not num_channels:
         raise ValueError("wav has no fmt chunk")
     return pcm_data, sample_rate, num_channels
-
-
-def _play_pcm_stream(audio_client: Any, pcm_data: bytes, stream_name: str, chunk_size: int = 96000) -> tuple[int, int]:
-    stream_id = str(int(time.time() * 1000))
-    offset = 0
-    chunk_index = 0
-    last_ret = 0
-    while offset < len(pcm_data):
-        chunk = pcm_data[offset : offset + chunk_size]
-        ret_code, _ = audio_client.PlayStream(stream_name, stream_id, chunk)
-        last_ret = ret_code
-        if ret_code != 0:
-            print(f"[relay] PlayStream failed chunk={chunk_index} ret={ret_code}", flush=True)
-            return chunk_index, ret_code
-        offset += len(chunk)
-        chunk_index += 1
-        time.sleep(0.05)
-    return chunk_index, last_ret
 
 
 def main() -> int:

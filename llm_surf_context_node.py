@@ -18,6 +18,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
 
+from pipeline_control.interrupt import InterruptControl
 from pipeline_log.pipeline_logger import PipelineLogger, SessionLog
 from project_config import CONFIG
 from reply_action_policy import is_explicit_action_request, resolve_reply_action
@@ -79,6 +80,7 @@ class LlmSurfContextNode(Node):
         self._session_id = ""
         self._standby_ack_event_mtime = 0.0
         self._standby_ack_event_updated_at = 0.0
+        self._interrupt_control = InterruptControl(CONFIG.runtime_dir)
 
         self.create_subscription(String, CONFIG.ros_audio_topic, self.on_audio_msg, 10)
         self.create_subscription(String, CONFIG.surf_wake_topic, self.on_wake, 10)
@@ -170,6 +172,7 @@ class LlmSurfContextNode(Node):
 
     def on_audio_msg(self, msg: String) -> None:
         received_at = time.time()
+        turn_generation = self._interrupt_control.current_generation()
         raw = msg.data
         speaker_from_audio = ""
         confidence: float | None = None
@@ -387,6 +390,9 @@ class LlmSurfContextNode(Node):
             self.get_logger().info(
                 f"conversation_session_id established after valid user request session_id={request_session_id}"
             )
+        if self._interrupt_control.generation_changed(turn_generation):
+            self._discard_interrupted_turn(request_session_id, "before_llm")
+            return
         llm_started_at = time.time()
         self._set_wake_light_green()
         self._session_record("thinking", text=user_text, session_id=request_session_id)
@@ -403,6 +409,9 @@ class LlmSurfContextNode(Node):
                 time.sleep(CONFIG.thinking_ack_play_gap_sec)
         llm_response = self._request_llm(llm_text, session_id=request_session_id, user_text=user_text)
         llm_finished_at = time.time()
+        if self._interrupt_control.generation_changed(turn_generation):
+            self._discard_interrupted_turn(request_session_id, "after_llm")
+            return
         reply = str(llm_response.get("reply", "")).strip()
         action_payload = llm_response.get("action", {})
         if not reply:
@@ -439,7 +448,12 @@ class LlmSurfContextNode(Node):
         tts_started_at = time.time()
         try:
             reply_tts_text = self._build_reply_tts_text(reply, user_text=user_text)
-            tts_ok = self._prepare_tts_wav("reply", reply_tts_text, session_id=request_session_id)
+            tts_ok = self._prepare_tts_wav(
+                "reply",
+                reply_tts_text,
+                session_id=request_session_id,
+                generation=turn_generation,
+            )
         except Exception as exc:
             self.get_logger().warn(f"Reply TTS request failed: {exc}")
             tts_ok = False
@@ -448,6 +462,9 @@ class LlmSurfContextNode(Node):
             self._session_record("tts_failed", session_id=request_session_id)
             self._set_wake_light_blue()
             self._close_session("session_end")
+            return
+        if self._interrupt_control.generation_changed(turn_generation):
+            self._discard_interrupted_turn(request_session_id, "after_tts")
             return
         self._update_status(
             last_tts_wav=str(CONFIG.tts_wav_path),
@@ -460,7 +477,7 @@ class LlmSurfContextNode(Node):
         self._session_record("tts_ready", session_id=request_session_id, text=reply)
         action_thread = threading.Thread(
             target=self.run_reply_action,
-            args=(reply, user_text, action_payload),
+            args=(reply, user_text, action_payload, turn_generation),
             daemon=True,
         )
         action_thread.start()
@@ -1548,12 +1565,19 @@ class LlmSurfContextNode(Node):
     def _set_wake_light_blue(self) -> None:
         self._set_wake_light_color("blue", 0, 0, 255)
 
-    def _write_tts_play_context(self, kind: str, text: str = "", session_id: str = "") -> None:
+    def _write_tts_play_context(
+        self,
+        kind: str,
+        text: str = "",
+        session_id: str = "",
+        generation: int | None = None,
+    ) -> None:
         try:
             payload = {
                 "kind": kind,
                 "text": text,
                 "session_id": session_id or self._session_id or "default",
+                "generation": generation,
                 "updated_at": time.time(),
             }
             CONFIG.tts_play_context_path.write_text(
@@ -1571,11 +1595,25 @@ class LlmSurfContextNode(Node):
         )
         response.raise_for_status()
 
-    def _prepare_tts_wav(self, kind: str, text: str, session_id: str = "") -> bool:
+    def _prepare_tts_wav(
+        self,
+        kind: str,
+        text: str,
+        session_id: str = "",
+        generation: int | None = None,
+    ) -> bool:
         with self._tts_lock:
-            self._write_tts_play_context(kind, text, session_id=session_id)
+            self._write_tts_play_context(kind, text, session_id=session_id, generation=generation)
             self._request_tts_mp3(text)
             return self._convert_tts_to_wav()
+
+    def _discard_interrupted_turn(self, session_id: str, stage: str) -> None:
+        self.get_logger().info(f"discarding stale turn after manual interrupt stage={stage}")
+        self._session_record(
+            "stale_turn_discarded",
+            stage=stage,
+            session_id=session_id,
+        )
 
     def _set_wake_light_color(
         self,
@@ -1870,29 +1908,37 @@ class LlmSurfContextNode(Node):
         reply: str,
         user_text: str = "",
         action_payload: dict[str, Any] | None = None,
+        action_generation: int | None = None,
     ) -> None:
+        if action_generation is not None and self._interrupt_control.generation_changed(action_generation):
+            self._discard_interrupted_turn(self._conversation_session_id, "before_action_lock")
+            return
         if not CONFIG.action_enable:
             self._session_record("action_skipped", reason="action_disabled", reply=reply)
-            self._close_session("session_end")
+            if action_generation is None or not self._interrupt_control.generation_changed(action_generation):
+                self._close_session("session_end")
             return
         if not self._action_lock.acquire(blocking=False):
             self.get_logger().warn("Skipping reply action because another action is still running.")
             self._update_status(last_error="action_busy", updated_at=time.time())
             self._session_record("action_skipped", reason="busy", reply=reply)
-            self._close_session("session_end")
+            if action_generation is None or not self._interrupt_control.generation_changed(action_generation):
+                self._close_session("session_end")
             return
 
         try:
-            self._run_reply_action_locked(reply, user_text, action_payload)
+            self._run_reply_action_locked(reply, user_text, action_payload, action_generation)
         finally:
             self._action_lock.release()
-            self._close_session("session_end")
+            if action_generation is None or not self._interrupt_control.generation_changed(action_generation):
+                self._close_session("session_end")
 
     def _run_reply_action_locked(
         self,
         reply: str,
         user_text: str = "",
         action_payload: dict[str, Any] | None = None,
+        action_generation: int | None = None,
     ) -> None:
         started_at = time.time()
         deepseek_action: dict[str, Any] | None = None
@@ -1916,8 +1962,17 @@ class LlmSurfContextNode(Node):
                     classification = legacy_payload.get("classification", {})
             if classification is None:
                 classification = self._no_action_classification(reply, "no_deepseek_action")
-            execution = self._execute_classified_action(classification)
-            self._log_action_result(classification, execution, started_at, reply)
+            if action_generation is not None and self._interrupt_control.generation_changed(action_generation):
+                self._discard_interrupted_turn(self._conversation_session_id, "before_action_execute")
+                return
+            execution = self._execute_classified_action(classification, action_generation)
+            self._log_action_result(
+                classification,
+                execution,
+                started_at,
+                reply,
+                action_generation,
+            )
             return
 
         if (
@@ -1961,8 +2016,17 @@ class LlmSurfContextNode(Node):
                     frequent_reply_enabled=CONFIG.action_frequent_reply_enable,
                 )
 
-        execution = self._execute_classified_action(classification)
-        self._log_action_result(classification, execution, started_at, reply)
+        if action_generation is not None and self._interrupt_control.generation_changed(action_generation):
+            self._discard_interrupted_turn(self._conversation_session_id, "before_action_execute")
+            return
+        execution = self._execute_classified_action(classification, action_generation)
+        self._log_action_result(
+            classification,
+            execution,
+            started_at,
+            reply,
+            action_generation,
+        )
 
     def _classification_from_deepseek_action(self, action_payload: dict[str, Any], reply: str) -> dict[str, Any]:
         allowed = {
@@ -2021,29 +2085,42 @@ class LlmSurfContextNode(Node):
             "reason": reason,
         }
 
-    def _runner_command(self, action_id: Any) -> list[str]:
-        return [
+    def _runner_command(self, action_id: Any, generation: int | None = None) -> list[str]:
+        command = [
             str(CONFIG.action_runner),
             "--network",
             CONFIG.unitree_network_interface,
             "--id",
             str(action_id),
         ]
+        if generation is not None:
+            command.extend(["--generation", str(generation)])
+        return command
 
-    def _execute_classified_action(self, classification: dict[str, Any]) -> dict[str, Any]:
+    def _execute_classified_action(
+        self,
+        classification: dict[str, Any],
+        action_generation: int | None = None,
+    ) -> dict[str, Any]:
         action_id = self._int_or_default(classification.get("action_id"), -1)
         if action_id < 0:
             return {"executed": False, "reason": "unknown_action"}
         if not classification.get("should_execute"):
             return {"executed": False, "reason": "score_below_threshold"}
         if not CONFIG.action_execute:
-            return {"executed": False, "reason": "dry_run", "would_run": self._runner_command(action_id)}
+            return {
+                "executed": False,
+                "reason": "dry_run",
+                "would_run": self._runner_command(action_id, action_generation),
+            }
         if not CONFIG.unitree_network_interface:
             return {"executed": False, "reason": "--network is required"}
         if not CONFIG.action_runner.exists():
             return {"executed": False, "reason": f"runner not found: {CONFIG.action_runner}"}
 
-        command = self._runner_command(action_id)
+        if action_generation is not None and self._interrupt_control.generation_changed(action_generation):
+            return {"executed": False, "reason": "stale_before_action_execute"}
+        command = self._runner_command(action_id, action_generation)
         try:
             completed = subprocess.run(
                 command,
@@ -2083,6 +2160,7 @@ class LlmSurfContextNode(Node):
         execution: dict[str, Any],
         started_at: float,
         reply: str,
+        action_generation: int | None = None,
     ) -> None:
         self.get_logger().info(
             "[ACTION] "
@@ -2124,9 +2202,12 @@ class LlmSurfContextNode(Node):
             and CONFIG.action_execute
             and execution.get("reason") == "arm_holding_release_required"
         ):
+            if action_generation is not None and self._interrupt_control.generation_changed(action_generation):
+                self._session_record("action_skipped", reason="stale_before_action_release", reply=reply)
+                return
             self.get_logger().warn("Arm is holding; running release action 99 and retrying once.")
-            if self.release_arm():
-                retry_execution = self._execute_classified_action(classification)
+            if self.release_arm(action_generation):
+                retry_execution = self._execute_classified_action(classification, action_generation)
                 self.get_logger().info(
                     "Reply action retry: "
                     f"{classification.get('label')} id={classification.get('action_id')} "
@@ -2144,7 +2225,10 @@ class LlmSurfContextNode(Node):
                 f"Action completed; releasing arm in {CONFIG.action_release_after_sec:.1f}s."
             )
             time.sleep(CONFIG.action_release_after_sec)
-            self.release_arm()
+            if action_generation is not None and self._interrupt_control.generation_changed(action_generation):
+                self._session_record("action_skipped", reason="stale_before_action_release", reply=reply)
+                return
+            self.release_arm(action_generation)
 
     @staticmethod
     def _int_or_default(value: Any, default: int) -> int:
@@ -2235,16 +2319,12 @@ class LlmSurfContextNode(Node):
             env["LD_LIBRARY_PATH"] = str(unitree_lib_dir) + (f":{existing}" if existing else "")
         return env
 
-    def release_arm(self) -> bool:
+    def release_arm(self, action_generation: int | None = None) -> bool:
+        if action_generation is not None and self._interrupt_control.generation_changed(action_generation):
+            return False
         try:
             completed = subprocess.run(
-                [
-                    str(CONFIG.action_runner),
-                    "--network",
-                    CONFIG.unitree_network_interface,
-                    "--id",
-                    "99",
-                ],
+                self._runner_command(99, action_generation),
                 check=False,
                 text=True,
                 capture_output=True,

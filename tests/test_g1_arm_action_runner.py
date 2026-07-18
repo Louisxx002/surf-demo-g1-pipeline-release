@@ -28,7 +28,8 @@ def test_g1_arm_action_runner_supports_relay_backend():
 
     assert 'os.environ.get("UNITREE_BACKEND", "direct")' in source
     assert "RobotRelayClient" in source
-    assert "client.run_arm_action(args.id" in source
+    assert "client.run_arm_action(" in source
+    assert "generation=args.generation" in source
 
 
 def test_g1_arm_action_runner_does_not_import_unitree_sdk_before_relay_branch():

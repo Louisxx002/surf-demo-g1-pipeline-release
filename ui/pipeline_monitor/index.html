@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>G1 Pipeline Monitor</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260704-readiness" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260718-interrupt" />
   </head>
   <body>
     <main class="app">
@@ -18,6 +18,9 @@
           <div id="sessionStatus" class="status session-status">Session: unknown</div>
           <button id="startPipelineButton" type="button">启动 Pipeline</button>
           <button id="stopPipelineButton" type="button">停止 Pipeline</button>
+          <button id="interruptPipelineButton" class="interrupt-command" type="button" disabled>
+            打断并听取
+          </button>
           <div id="connection" class="status">Connecting</div>
         </div>
       </header>
@@ -64,6 +67,6 @@
       </div>
     </main>
 
-    <script src="/static/app.js?v=20260704-readiness"></script>
+    <script src="/static/app.js?v=20260718-interrupt2"></script>
   </body>
 </html>

@@ -20,6 +20,7 @@ from pipeline_monitor.server import (
     read_existing_events,
     robot_mic_status,
     run_pipeline_command,
+    run_pipeline_interrupt,
 )
 from http.server import ThreadingHTTPServer
 
@@ -89,6 +90,20 @@ class PipelineMonitorTests(unittest.TestCase):
         self.assertEqual(failed_event["title"], "LLM_FAILED")
         self.assertIn("timed out", failed_event["message"])
         self.assertEqual(failed_event["meta"]["timeout_sec"], 20)
+
+        interrupted_event = event_view(
+            {
+                "stage": "manual_interrupt",
+                "generation": 8,
+                "listening_opened": False,
+                "partial": True,
+                "errors": ["stop_audio returned ret=3102"],
+            }
+        )
+        self.assertEqual(interrupted_event["kind"], "error")
+        self.assertEqual(interrupted_event["title"], "INTERRUPT_FAILED")
+        self.assertEqual(interrupted_event["message"], "打断未完成")
+        self.assertFalse(interrupted_event["meta"]["listening_opened"])
 
     def test_read_existing_events_skips_invalid_json_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -397,6 +412,141 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
     def test_run_pipeline_command_rejects_unknown_action(self):
         with self.assertRaises(ValueError):
             run_pipeline_command("restart")
+
+    def test_run_pipeline_interrupt_stops_audio_releases_arm_and_records_event(self):
+        calls = []
+
+        class FakeRelayClient:
+            def stop_audio(self, app_name, generation=None):
+                calls.append(("stop_audio", app_name, generation))
+                return {"ok": True, "ret": 0}
+
+            def release_arm(self, generation=None):
+                calls.append(("release_arm", generation))
+                return {"ok": True, "ret": 0}
+
+        class FakeControl:
+            def begin(self, session_id):
+                calls.append(("begin", session_id))
+                return {"request_id": "interrupt-1", "generation": 4, "session_id": session_id}
+
+            def open_listening(self, command, followup_timeout_sec):
+                calls.append(("open_listening", command["generation"], followup_timeout_sec))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            logs_dir = Path(tmp) / "logs"
+            log_path = logs_dir / "20260718_010203_s001" / "pipeline.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text('{"stage":"llm_reply"}\n', encoding="utf-8")
+
+            result = run_pipeline_interrupt(
+                logs_dir=logs_dir,
+                pipeline_running_checker=lambda: True,
+                relay_client_factory=lambda: FakeRelayClient(),
+                interrupt_control=FakeControl(),
+                followup_timeout_sec=15,
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["partial"])
+            self.assertEqual(result["generation"], 4)
+            self.assertEqual(
+                calls,
+                [
+                    ("begin", "20260718_010203_s001"),
+                    ("stop_audio", "tts", 4),
+                    ("release_arm", 4),
+                    ("open_listening", 4, 15),
+                ],
+            )
+            event = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(event["stage"], "manual_interrupt")
+            self.assertEqual(event["generation"], 4)
+
+    def test_run_pipeline_interrupt_refuses_when_pipeline_is_stopped(self):
+        result = run_pipeline_interrupt(
+            pipeline_running_checker=lambda: False,
+            relay_client_factory=lambda: self.fail("relay must not be called"),
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "pipeline_not_running")
+
+    def test_run_pipeline_interrupt_reports_nonzero_robot_results_as_partial(self):
+        class FakeRelayClient:
+            def stop_audio(self, app_name, generation=None):
+                return {"ok": True, "ret": 3102, "app_name": app_name}
+
+            def release_arm(self, generation=None):
+                return {"ok": True, "ret": 3102, "action_id": 99}
+
+        class FakeControl:
+            def begin(self, session_id):
+                return {"request_id": "interrupt-2", "generation": 5, "session_id": session_id}
+
+            def open_listening(self, command, followup_timeout_sec):
+                self.opened = True
+
+        result = run_pipeline_interrupt(
+            pipeline_running_checker=lambda: True,
+            relay_client_factory=lambda: FakeRelayClient(),
+            interrupt_control=FakeControl(),
+            followup_timeout_sec=15,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["partial"])
+        self.assertIn("stop_audio returned ret=3102", result["errors"])
+        self.assertIn("release_arm returned ret=3102", result["errors"])
+        self.assertFalse(result["listening_opened"])
+
+    def test_run_pipeline_interrupt_does_not_listen_when_arm_release_fails(self):
+        class FakeRelayClient:
+            def stop_audio(self, app_name, generation=None):
+                return {"ok": True, "ret": 0, "app_name": app_name}
+
+            def release_arm(self, generation=None):
+                return {"ok": True, "ret": 3102, "action_id": 99}
+
+        class FakeControl:
+            opened = False
+
+            def begin(self, session_id):
+                return {"request_id": "interrupt-3", "generation": 6, "session_id": session_id}
+
+            def open_listening(self, command, followup_timeout_sec):
+                self.opened = True
+
+        control = FakeControl()
+        result = run_pipeline_interrupt(
+            pipeline_running_checker=lambda: True,
+            relay_client_factory=lambda: FakeRelayClient(),
+            interrupt_control=control,
+            followup_timeout_sec=15,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["listening_opened"])
+        self.assertFalse(control.opened)
+        self.assertIn("动作未安全释放", result["message"])
+
+    def test_monitor_ui_exposes_manual_interrupt_control(self):
+        project_root = Path(__file__).resolve().parents[1]
+        html = (project_root / "ui/pipeline_monitor/index.html").read_text(encoding="utf-8")
+        javascript = (project_root / "ui/pipeline_monitor/app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="interruptPipelineButton"', html)
+        self.assertIn("打断并听取", html)
+        self.assertIn('fetch("/api/pipeline/interrupt"', javascript)
+        self.assertIn('interruptPipelineButton.disabled = state !== "running"', javascript)
+        self.assertIn('setSessionStatus("打断失败", "partial")', javascript)
+        self.assertIn('let currentLogPath = "";', javascript)
+        self.assertIn("switchLogIfNeeded(payload.log_path)", javascript)
+        self.assertIn("resetMonitorData", javascript)
+        interrupt_handler = javascript.split("async function runPipelineInterrupt()", 1)[1].split(
+            "function compactCommandOutput", 1
+        )[0]
+        self.assertNotIn("addEvent({", interrupt_handler.split("catch (error)", 1)[0])
 
 
 if __name__ == "__main__":

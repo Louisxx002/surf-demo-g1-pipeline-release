@@ -10,12 +10,16 @@ const pipelineStatus = document.querySelector("#pipelineStatus");
 const sessionStatus = document.querySelector("#sessionStatus");
 const startPipelineButton = document.querySelector("#startPipelineButton");
 const stopPipelineButton = document.querySelector("#stopPipelineButton");
+const interruptPipelineButton = document.querySelector("#interruptPipelineButton");
 const readinessList = document.querySelector("#readinessList");
 
 const maxEvents = 240;
 const turnItems = new Map();
 let eventItems = [];
 const seenEventKeys = new Set();
+let pipelineBusy = false;
+let currentPipelineState = "unknown";
+let currentLogPath = "";
 
 function formatTime(value) {
   if (!value) return "--:--:--";
@@ -181,15 +185,44 @@ function renderEvents() {
   eventsList.scrollTop = 0;
 }
 
+function resetMonitorData(nextLogPath = "") {
+  eventItems = [];
+  seenEventKeys.clear();
+  turnItems.clear();
+  eventsList.replaceChildren();
+  turnsList.replaceChildren();
+  lastAsr.textContent = "-";
+  lastLlm.textContent = "-";
+  lastAction.textContent = "-";
+  currentLogPath = nextLogPath;
+  if (nextLogPath) logPath.textContent = nextLogPath;
+}
+
+function switchLogIfNeeded(nextLogPath) {
+  if (!nextLogPath) return false;
+  if (currentLogPath && currentLogPath !== nextLogPath) {
+    resetMonitorData(nextLogPath);
+    return true;
+  }
+  currentLogPath = nextLogPath;
+  logPath.textContent = nextLogPath;
+  return false;
+}
+
 function setPipelineBusy(isBusy) {
+  pipelineBusy = isBusy;
   startPipelineButton.disabled = isBusy;
   stopPipelineButton.disabled = isBusy;
+  interruptPipelineButton.disabled = isBusy || currentPipelineState !== "running";
 }
 
 function updatePipelineStatus(payload) {
   const state = payload?.state || "unknown";
+  currentPipelineState = state;
   pipelineStatus.textContent = `Pipeline: ${state}`;
   pipelineStatus.className = `status ${state === "running" ? "ok" : state === "partial" ? "partial" : state === "stopped" ? "" : "error"}`;
+  interruptPipelineButton.disabled = state !== "running";
+  if (pipelineBusy) interruptPipelineButton.disabled = true;
   renderReadiness(payload || {});
 }
 
@@ -303,6 +336,31 @@ async function runPipelineAction(action) {
   }
 }
 
+async function runPipelineInterrupt() {
+  setPipelineBusy(true);
+  setSessionStatus("正在打断", "partial");
+  try {
+    const response = await fetch("/api/pipeline/interrupt", { method: "POST" });
+    const payload = await response.json();
+    const listeningOpened = Boolean(payload.listening_opened);
+    const succeeded = Boolean(payload.ok || (payload.partial && listeningOpened));
+    if (payload.partial) {
+      setSessionStatus(listeningOpened ? "部分完成，正在听取" : "打断未完成", "partial");
+    } else if (succeeded) {
+      setSessionStatus("已打断，正在听取", "ok");
+    } else {
+      setSessionStatus("打断失败", "partial");
+    }
+    await loadSnapshot();
+  } catch (error) {
+    addEvent({ kind: "system", title: "ERROR", message: `打断失败：${String(error)}` });
+    setSessionStatus("打断失败", "partial");
+  } finally {
+    await refreshPipelineStatus();
+    setPipelineBusy(false);
+  }
+}
+
 function compactCommandOutput(value) {
   if (!value) return "";
   return String(value).split(/\r?\n/).filter(Boolean).slice(-3).join(" | ");
@@ -338,6 +396,14 @@ function updateSessionStatus(event) {
     setSessionStatus("等待追问", "ok");
   } else if (stage === "followup_open") {
     setSessionStatus("等待追问", "ok");
+  } else if (stage === "manual_interrupt") {
+    if (event.raw?.listening_opened) {
+      setSessionStatus(event.raw?.partial ? "部分完成，正在听取" : "已打断，正在听取", event.raw?.partial ? "partial" : "ok");
+    } else {
+      setSessionStatus("打断未完成", "partial");
+    }
+  } else if (stage === "manual_interrupt_failed") {
+    setSessionStatus("打断失败", "partial");
   } else if (stage === "followup_closed" || stage === "terminate_command" || stage === "session_end") {
     setSessionStatus("已关闭", "");
   } else if (stage === "wake_listen_closed") {
@@ -346,6 +412,7 @@ function updateSessionStatus(event) {
 }
 
 function addEvent(event) {
+  switchLogIfNeeded(event.log_path);
   updateSummary(event);
 
   const key = eventKey(event);
@@ -359,7 +426,7 @@ function addEvent(event) {
 async function loadSnapshot() {
   const response = await fetch("/api/events?limit=80");
   const payload = await response.json();
-  if (payload.log_path) logPath.textContent = payload.log_path;
+  switchLogIfNeeded(payload.log_path);
   renderTurnSummaries(payload.turn_summaries);
   for (const event of payload.events || []) addEvent(event);
 }
@@ -368,6 +435,7 @@ async function refreshTurns() {
   try {
     const response = await fetch("/api/turns?limit=30");
     const payload = await response.json();
+    switchLogIfNeeded(payload.log_path);
     renderTurnSummaries(payload.turn_summaries);
   } catch (error) {
     addEvent({ kind: "system", title: "ERROR", message: String(error) });
@@ -394,13 +462,12 @@ function connectEvents() {
 }
 
 clearButton.addEventListener("click", () => {
-  eventItems = [];
-  seenEventKeys.clear();
-  eventsList.replaceChildren();
+  resetMonitorData(currentLogPath);
 });
 
 startPipelineButton.addEventListener("click", () => runPipelineAction("start"));
 stopPipelineButton.addEventListener("click", () => runPipelineAction("stop"));
+interruptPipelineButton.addEventListener("click", runPipelineInterrupt);
 
 loadSnapshot()
   .catch((error) => addEvent({ kind: "system", title: "ERROR", message: String(error) }))
