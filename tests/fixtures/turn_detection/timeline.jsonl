@@ -1,0 +1,6 @@
+{"event_id":"event-001","session_id":"session-demo","turn_id":"turn-001","timestamp_ms":1000,"vad_state":"speech","silence_ms":0,"partial_text":"请帮我查","final_text":"","agent_playing":false,"expected_decision":"CONTINUE_SPEAKING"}
+{"event_id":"event-002","session_id":"session-demo","turn_id":"turn-001","timestamp_ms":1350,"vad_state":"silence","silence_ms":350,"partial_text":"请帮我查询今天天气","final_text":"今天天气怎么样？","agent_playing":false,"expected_decision":"END_OF_TURN"}
+{"event_id":"event-003","session_id":"session-demo","turn_id":"turn-002","timestamp_ms":2000,"vad_state":"silence","silence_ms":650,"partial_text":"还没说完","final_text":"","agent_playing":false,"expected_decision":"CONTINUE_SPEAKING"}
+{"event_id":"event-004","session_id":"session-demo","turn_id":"turn-003","timestamp_ms":3000,"vad_state":"speech","silence_ms":100,"partial_text":"嗯","final_text":"嗯","agent_playing":true,"expected_decision":"BACKCHANNEL"}
+{"event_id":"event-005","session_id":"session-demo","turn_id":"turn-004","timestamp_ms":4000,"vad_state":"speech","silence_ms":80,"partial_text":"停一下","final_text":"停一下","agent_playing":true,"expected_decision":"TRUE_INTERRUPT"}
+{"event_id":"event-006","session_id":"session-demo","turn_id":"turn-005","timestamp_ms":5000,"vad_state":"speech","silence_ms":120,"partial_text":"这个","final_text":"这个","agent_playing":true,"expected_decision":"UNCERTAIN"}

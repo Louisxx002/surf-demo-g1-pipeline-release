@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>G1 Pipeline Monitor</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260718-interrupt" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260720-shadow" />
   </head>
   <body>
     <main class="app">
@@ -51,6 +51,19 @@
         </div>
       </section>
 
+      <section id="shadowPanel" class="shadow-panel" aria-label="Shadow 对照">
+        <div class="events-head">
+          <div>
+            <h2>Shadow 对照</h2>
+            <span>只观察，不控制机器人</span>
+          </div>
+          <span id="shadowStatus" class="shadow-status">未启用</span>
+        </div>
+        <div id="shadowComparisons" class="shadow-comparisons">
+          <p class="shadow-empty">当前会话没有 Shadow 数据</p>
+        </div>
+      </section>
+
       <div class="monitor-grid">
         <section class="turns" aria-label="轮次耗时">
           <div class="events-head">
@@ -70,6 +83,6 @@
       </div>
     </main>
 
-    <script src="/static/app.js?v=20260718-session-end"></script>
+    <script src="/static/app.js?v=20260720-shadow"></script>
   </body>
 </html>

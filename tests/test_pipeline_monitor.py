@@ -17,6 +17,7 @@ from pipeline_monitor.server import (
     find_latest_pipeline_log,
     make_handler,
     pipeline_status,
+    read_shadow_comparisons,
     read_existing_events,
     robot_mic_status,
     run_pipeline_command,
@@ -106,6 +107,25 @@ class PipelineMonitorTests(unittest.TestCase):
         self.assertEqual(interrupted_event["message"], "打断未完成")
         self.assertFalse(interrupted_event["meta"]["listening_opened"])
 
+        shadow_event = event_view(
+            {
+                "stage": "turn_shadow_comparison",
+                "comparison_id": "s001-seg001-endpoint",
+                "context": "endpointing",
+                "status": "matched",
+                "agreement": True,
+                "delta_ms": 184,
+                "read_only": True,
+                "baseline": {"decision": "end_of_turn"},
+                "shadow": {"decision": "end_of_turn", "detector": "dynamic_v1"},
+            }
+        )
+        self.assertEqual(shadow_event["kind"], "shadow")
+        self.assertEqual(shadow_event["title"], "SHADOW")
+        self.assertIn("end_of_turn", shadow_event["message"])
+        self.assertTrue(shadow_event["meta"]["read_only"])
+        self.assertEqual(shadow_event["meta"]["comparison_id"], "s001-seg001-endpoint")
+
     def test_read_existing_events_skips_invalid_json_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "pipeline.log"
@@ -123,6 +143,44 @@ class PipelineMonitorTests(unittest.TestCase):
             events = read_existing_events(log_path)
 
             self.assertEqual([event["title"] for event in events], ["WAKE", "LLM"])
+
+    def test_read_shadow_comparisons_groups_detectors_and_is_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shadow_path = Path(tmp) / "turn_shadow.jsonl"
+            rows = []
+            for detector, decision, confidence, latency in (
+                ("baseline", "CONTINUE_SPEAKING", 0.7, 0.12),
+                ("dynamic_v1", "END_OF_TURN", 0.91, 0.34),
+            ):
+                rows.append(
+                    {
+                        "event_id": f"s001:00000001:asr_final:{detector}",
+                        "session_id": "s001",
+                        "turn_id": "turn-001",
+                        "timestamp": 1000.0,
+                        "decision": decision,
+                        "confidence": confidence,
+                        "reason": "test",
+                        "final_text": "hello",
+                        "agent_playing": False,
+                        "detector_name": detector,
+                        "detector_latency_ms": latency,
+                    }
+                )
+            shadow_path.write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            comparisons = read_shadow_comparisons(shadow_path)
+
+            self.assertEqual(len(comparisons), 1)
+            self.assertFalse(comparisons[0]["agreement"])
+            self.assertTrue(comparisons[0]["read_only"])
+            self.assertEqual(
+                comparisons[0]["detectors"]["dynamic_v1"]["decision"],
+                "END_OF_TURN",
+            )
 
     def test_api_events_includes_turn_summaries(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -152,6 +210,68 @@ class PipelineMonitorTests(unittest.TestCase):
 
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["turn_summaries"][0]["asr_text"], "你好")
+
+    def test_api_shadow_returns_read_only_detector_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logs_dir = Path(tmp)
+            session_dir = logs_dir / "20260720_120000_s001"
+            session_dir.mkdir()
+            (session_dir / "pipeline.log").write_text(
+                '{"stage":"wake"}\n', encoding="utf-8"
+            )
+            rows = [
+                {
+                    "event_id": f"s001:0001:asr_final:{detector}",
+                    "session_id": "s001",
+                    "timestamp": 1000.0,
+                    "decision": decision,
+                    "confidence": confidence,
+                    "reason": "test",
+                    "final_text": "你好",
+                    "detector_name": detector,
+                    "detector_latency_ms": latency,
+                }
+                for detector, decision, confidence, latency in (
+                    ("baseline", "CONTINUE_SPEAKING", 0.7, 0.12),
+                    ("dynamic_v1", "END_OF_TURN", 0.91, 0.34),
+                )
+            ]
+            (session_dir / "turn_shadow.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(logs_dir))
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = f"http://127.0.0.1:{server.server_port}/api/shadow?limit=8"
+                payload = json.loads(
+                    urllib.request.urlopen(url, timeout=3).read().decode("utf-8")
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+
+            self.assertTrue(payload["ok"])
+            self.assertTrue(payload["enabled"])
+            self.assertTrue(payload["read_only"])
+            self.assertEqual(len(payload["comparisons"]), 1)
+            self.assertFalse(payload["comparisons"][0]["agreement"])
+
+    def test_monitor_ui_exposes_read_only_shadow_comparison_panel(self):
+        project_root = Path(__file__).resolve().parents[1]
+        html = (project_root / "ui/pipeline_monitor/index.html").read_text(
+            encoding="utf-8"
+        )
+        javascript = (project_root / "ui/pipeline_monitor/app.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('id="shadowPanel"', html)
+        self.assertIn("Shadow 对照", html)
+        self.assertIn("只观察，不控制机器人", html)
+        self.assertIn('fetch("/api/shadow?limit=8")', javascript)
+        self.assertIn("renderShadowComparisons", javascript)
 
     def test_pipeline_status_reports_running_when_core_services_are_active(self):
         def fake_runner(command, **kwargs):

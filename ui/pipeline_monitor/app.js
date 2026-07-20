@@ -13,6 +13,8 @@ const stopPipelineButton = document.querySelector("#stopPipelineButton");
 const interruptPipelineButton = document.querySelector("#interruptPipelineButton");
 const endSessionButton = document.querySelector("#endSessionButton");
 const readinessList = document.querySelector("#readinessList");
+const shadowStatus = document.querySelector("#shadowStatus");
+const shadowComparisons = document.querySelector("#shadowComparisons");
 
 const maxEvents = 240;
 const turnItems = new Map();
@@ -195,8 +197,88 @@ function resetMonitorData(nextLogPath = "") {
   lastAsr.textContent = "-";
   lastLlm.textContent = "-";
   lastAction.textContent = "-";
+  renderShadowComparisons([], false);
   currentLogPath = nextLogPath;
   if (nextLogPath) logPath.textContent = nextLogPath;
+}
+
+function shadowDecisionLabel(value) {
+  const labels = {
+    CONTINUE_SPEAKING: "继续说话",
+    END_OF_TURN: "轮次结束",
+    TRUE_INTERRUPT: "真实打断",
+    BACKCHANNEL: "附和",
+    UNCERTAIN: "不确定",
+  };
+  return labels[value] || value || "-";
+}
+
+function renderShadowDetector(name, detector) {
+  const item = document.createElement("div");
+  item.className = "shadow-detector";
+  const header = document.createElement("div");
+  header.className = "shadow-detector-head";
+  const label = document.createElement("strong");
+  label.textContent = name === "baseline" ? "当前规则" : name;
+  const latency = document.createElement("span");
+  latency.textContent = `${Number(detector?.latency_ms || 0).toFixed(2)} ms`;
+  header.append(label, latency);
+
+  const decision = document.createElement("div");
+  decision.className = "shadow-decision";
+  decision.textContent = shadowDecisionLabel(detector?.decision);
+  const detail = document.createElement("p");
+  const confidence = Number(detector?.confidence || 0);
+  detail.textContent = `置信度 ${confidence.toFixed(2)} · ${detector?.reason || "无说明"}`;
+  item.append(header, decision, detail);
+  return item;
+}
+
+function renderShadowComparisons(comparisons, enabled) {
+  if (!shadowComparisons || !shadowStatus) return;
+  shadowStatus.textContent = enabled ? "观察中" : "未启用";
+  shadowStatus.className = `shadow-status ${enabled ? "enabled" : ""}`.trim();
+
+  const rows = comparisons || [];
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "shadow-empty";
+    empty.textContent = enabled ? "等待本轮观察数据" : "当前会话没有 Shadow 数据";
+    shadowComparisons.replaceChildren(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const comparison of rows) {
+    const row = document.createElement("article");
+    row.className = `shadow-row ${comparison.agreement ? "agrees" : "differs"}`;
+    const context = document.createElement("div");
+    context.className = "shadow-context";
+    const text = document.createElement("strong");
+    text.textContent = comparison.text || "（无转写）";
+    const state = document.createElement("span");
+    state.textContent = comparison.agreement ? "一致" : "存在差异";
+    context.append(text, state);
+
+    const detectorGrid = document.createElement("div");
+    detectorGrid.className = "shadow-detector-grid";
+    for (const [name, detector] of Object.entries(comparison.detectors || {})) {
+      detectorGrid.appendChild(renderShadowDetector(name, detector));
+    }
+    row.append(context, detectorGrid);
+    fragment.appendChild(row);
+  }
+  shadowComparisons.replaceChildren(fragment);
+}
+
+async function refreshShadowComparisons() {
+  try {
+    const response = await fetch("/api/shadow?limit=8");
+    const payload = await response.json();
+    renderShadowComparisons(payload.comparisons || [], Boolean(payload.enabled));
+  } catch (error) {
+    renderShadowComparisons([], false);
+  }
 }
 
 function switchLogIfNeeded(nextLogPath) {
@@ -501,7 +583,9 @@ loadSnapshot()
   .catch((error) => addEvent({ kind: "system", title: "ERROR", message: String(error) }))
   .finally(() => {
     refreshPipelineStatus();
+    refreshShadowComparisons();
     connectEvents();
     setInterval(refreshTurns, 2500);
+    setInterval(refreshShadowComparisons, 2500);
     setInterval(refreshPipelineStatus, 5000);
   });

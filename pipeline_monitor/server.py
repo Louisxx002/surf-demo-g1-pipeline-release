@@ -216,6 +216,27 @@ def event_view(entry: dict[str, Any]) -> dict[str, Any]:
             entry,
             ("generation", "request_id", "partial", "listening_opened", "errors", "session_id"),
         )
+    elif stage == "turn_shadow_comparison":
+        kind = "shadow"
+        title = "SHADOW"
+        baseline = entry.get("baseline") if isinstance(entry.get("baseline"), dict) else {}
+        shadow = entry.get("shadow") if isinstance(entry.get("shadow"), dict) else {}
+        baseline_decision = str(baseline.get("decision", "unknown"))
+        shadow_decision = str(shadow.get("decision", "unknown"))
+        message = f"baseline={baseline_decision} shadow={shadow_decision}"
+        meta = _compact_meta(
+            entry,
+            (
+                "comparison_id",
+                "context",
+                "status",
+                "agreement",
+                "delta_ms",
+                "read_only",
+                "dropped_frames",
+                "session_id",
+            ),
+        )
     elif stage == "followup_closed":
         kind = "state"
         title = "SESSION"
@@ -256,6 +277,51 @@ def read_existing_events(log_path: Path, limit: int | None = None) -> list[dict[
     if limit and len(events) > limit:
         return events[-limit:]
     return events
+
+
+def read_shadow_comparisons(
+    shadow_path: Path,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    if not shadow_path.exists():
+        return []
+    for line in shadow_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        payload = parse_pipeline_line(line)
+        if payload is None:
+            continue
+        event_id = str(payload.get("event_id", ""))
+        detector_name = str(payload.get("detector_name", ""))
+        if not event_id or not detector_name:
+            continue
+        suffix = f":{detector_name}"
+        comparison_id = event_id[: -len(suffix)] if event_id.endswith(suffix) else event_id
+        item = grouped.setdefault(
+            comparison_id,
+            {
+                "comparison_id": comparison_id,
+                "session_id": str(payload.get("session_id", "")),
+                "timestamp": payload.get("timestamp", 0),
+                "text": str(payload.get("final_text") or payload.get("partial_text") or ""),
+                "agent_playing": bool(payload.get("agent_playing")),
+                "detectors": {},
+                "read_only": True,
+            },
+        )
+        item["detectors"][detector_name] = {
+            "decision": str(payload.get("decision", "UNCERTAIN")),
+            "confidence": payload.get("confidence", 0),
+            "reason": str(payload.get("reason", "")),
+            "latency_ms": payload.get("detector_latency_ms", 0),
+        }
+    comparisons = list(grouped.values())
+    for item in comparisons:
+        decisions = {
+            detector["decision"] for detector in item["detectors"].values()
+        }
+        item["agreement"] = len(decisions) <= 1 and len(item["detectors"]) > 1
+    comparisons.sort(key=lambda item: float(item.get("timestamp") or 0), reverse=True)
+    return comparisons[:limit]
 
 
 def _completed_process_payload(result: Any) -> dict[str, Any]:
@@ -868,6 +934,10 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                 query = parse_qs(parsed.query)
                 limit = int(query.get("limit", ["20"])[0])
                 self._serve_turns(limit=limit)
+            elif parsed.path == "/api/shadow":
+                query = parse_qs(parsed.query)
+                limit = int(query.get("limit", ["20"])[0])
+                self._serve_shadow(limit=limit)
             elif parsed.path == "/api/pipeline/status":
                 self._serve_pipeline_status()
             elif parsed.path == "/events":
@@ -947,6 +1017,23 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                     "log_path": str(latest),
                     "session_id": latest.parent.name,
                     "turn_summaries": read_turn_summaries(latest, limit=limit),
+                },
+            )
+
+        def _serve_shadow(self, limit: int = 20) -> None:
+            latest = find_latest_pipeline_log(logs_dir)
+            if latest is None:
+                _json_response(self, {"ok": False, "enabled": False, "comparisons": []})
+                return
+            shadow_path = latest.parent / "turn_shadow.jsonl"
+            _json_response(
+                self,
+                {
+                    "ok": True,
+                    "enabled": shadow_path.exists(),
+                    "read_only": True,
+                    "session_id": latest.parent.name,
+                    "comparisons": read_shadow_comparisons(shadow_path, limit=limit),
                 },
             )
 

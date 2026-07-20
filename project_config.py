@@ -77,6 +77,8 @@ def _env_list_compat(name: str, legacy_name: str, default: tuple[str, ...]) -> t
 class ProjectConfig:
     project_root: Path = PROJECT_ROOT
     runtime_dir: Path = Path(_env_compat("LLM_RUNTIME_DIR", "QWEN_RUNTIME_DIR", str(PROJECT_ROOT / "runtime")))
+    turn_shadow_enable: bool = _env_bool("TURN_SHADOW_ENABLE", False)
+    turn_shadow_detector: str = _env("TURN_SHADOW_DETECTOR", "baseline")
 
     ros_audio_topic: str = _env_compat("LLM_AUDIO_TOPIC", "QWEN_AUDIO_TOPIC", "/audio_msg")
     surf_wake_topic: str = _env("SURF_WAKE_TOPIC", "/wake_word_event")

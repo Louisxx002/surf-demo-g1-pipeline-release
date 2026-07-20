@@ -21,6 +21,7 @@ from wake_word.wake_word_detector import WakeWordDetector
 from wake_word.wakeup_dispatcher import WakeupDispatcher
 
 from pipeline_log.pipeline_logger import PipelineLogger, SessionLog
+from turn_detection.runtime_shadow import TurnShadowRuntime
 
 
 logging.basicConfig(level=logging.INFO, format="[surf_voice_runtime] %(message)s")
@@ -72,6 +73,7 @@ class SurfVoiceRuntime:
         self._sink = UdpEventSink()
         self._pipeline_logger = PipelineLogger()
         self._session_log: SessionLog | None = None
+        self._turn_shadow: TurnShadowRuntime | None = None
         self._session_id = ""
         self._started_at = time.time()
         self._recording = False
@@ -136,6 +138,7 @@ class SurfVoiceRuntime:
     def stop(self) -> None:
         self._mic.stop()
         self._wakeword.stop()
+        self._mirror_turn_shadow("close")
 
     def spin(self) -> None:
         while True:
@@ -153,6 +156,11 @@ class SurfVoiceRuntime:
     def _on_wake(self, word: str) -> None:
         self._close_followup_window("new_wake")
         self._session_id = self._new_session(word)
+        self._mirror_turn_shadow(
+            "submit_wake",
+            word,
+            agent_playing=self._is_tts_guard_active,
+        )
         logger.info("wake: %s session=%s", word, self._session_id)
         self._sink.publish(
             "/wake_word_event",
@@ -177,6 +185,11 @@ class SurfVoiceRuntime:
     def _on_vad(self, is_speech: bool) -> None:
         logger.info("vad: %s", is_speech)
         self._sink.publish("/vad_state", "bool", is_speech)
+        self._mirror_turn_shadow(
+            "submit_vad",
+            is_speech,
+            agent_playing=self._is_tts_guard_active,
+        )
         if is_speech and not self._recording and self._followup_active():
             if self._is_tts_guard_active():
                 logger.info("follow-up speech ignored due to tts guard")
@@ -188,6 +201,14 @@ class SurfVoiceRuntime:
             self._asr_deadline = 0.0
             self._save_audio()
             self._asr.stop_and_transcribe()
+
+    def _mirror_turn_shadow(self, method_name: str, *args, **kwargs) -> None:
+        try:
+            shadow = getattr(self, "_turn_shadow", None)
+            if shadow is not None:
+                getattr(shadow, method_name)(*args, **kwargs)
+        except Exception:
+            pass
 
     def _on_asr(self, text: str) -> None:
         logger.info("asr: %s speaker=%s session=%s", text, self._current_speaker, self._session_id)
@@ -203,6 +224,11 @@ class SurfVoiceRuntime:
                 },
                 ensure_ascii=False,
             ),
+        )
+        self._mirror_turn_shadow(
+            "submit_asr_final",
+            text,
+            agent_playing=self._is_tts_guard_active,
         )
         if self._session_log:
             self._session_log.record_duration(
@@ -421,6 +447,15 @@ class SurfVoiceRuntime:
         session = self._pipeline_logger.start_session(wake_word)
         self._session_log = session
         self._session_id = session.session_id
+        self._mirror_turn_shadow("close")
+        self._turn_shadow = None
+        try:
+            self._turn_shadow = TurnShadowRuntime(
+                session_log=session,
+                enabled=_env_bool("TURN_SHADOW_ENABLE", False),
+            )
+        except Exception:
+            pass
         return self._session_id
 
     def _save_audio(self) -> None:
