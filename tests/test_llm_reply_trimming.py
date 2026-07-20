@@ -30,6 +30,21 @@ class LlmReplyTrimmingTests(unittest.TestCase):
 
         self.assertEqual(trimmed, "西交利物浦大学在苏州。")
 
+    def test_brief_trim_does_not_leave_only_an_english_acknowledgement(self):
+        reply = (
+            "Sure! "
+            "The Information and Computing Science programme covers programming, "
+            "algorithms, databases, artificial intelligence, and software engineering."
+        )
+
+        trimmed = self.llm_server._trim_reply_for_brief_mode(
+            reply,
+            "tell me about the modules in ICS",
+        )
+
+        self.assertNotEqual(trimmed, "Sure!")
+        self.assertIn("Information and Computing Science", trimmed)
+
 
 if __name__ == "__main__":
     unittest.main()

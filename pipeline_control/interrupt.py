@@ -15,6 +15,7 @@ class InterruptControl:
     def __init__(self, runtime_dir: Path) -> None:
         self.runtime_dir = Path(runtime_dir)
         self.command_path = self.runtime_dir / "interrupt_command.json"
+        self.session_command_path = self.runtime_dir / "session_command.json"
         self.followup_path = self.runtime_dir / "followup_control.json"
         self.tts_guard_path = self.runtime_dir / "tts_guard.json"
 
@@ -27,6 +28,19 @@ class InterruptControl:
 
     def generation_changed(self, generation: int) -> bool:
         return self.current_generation() != int(generation)
+
+    def playback_active(self, now: float | None = None) -> bool:
+        payload = self._read_json(self.tts_guard_path)
+        if not bool(payload.get("active", False)):
+            return False
+        try:
+            guard_until = float(payload.get("guard_until", 0.0))
+        except (TypeError, ValueError):
+            return False
+        return guard_until > float(time.time() if now is None else now)
+
+    def read_session_command(self) -> dict[str, Any]:
+        return self._read_json(self.session_command_path)
 
     def wait_until(self, deadline: float, generation: int, poll_sec: float = 0.05) -> bool:
         """Wait for a wall-clock deadline, returning False when interrupted."""
@@ -95,6 +109,52 @@ class InterruptControl:
         payload = self.begin(session_id=session_id)
         self.open_listening(payload, followup_timeout_sec=followup_timeout_sec)
         return payload
+
+    def clear_playback_guard(self, command: dict[str, Any], kind: str = "wake_interrupt") -> None:
+        with _COMMAND_LOCK:
+            generation = int(command.get("generation", -1))
+            if generation != self.current_generation():
+                raise RuntimeError(
+                    f"stale interrupt generation={generation} current={self.current_generation()}"
+                )
+            now = time.time()
+            self._atomic_write(
+                self.tts_guard_path,
+                {
+                    "active": False,
+                    "kind": str(kind),
+                    "text": "",
+                    "session_id": str(command.get("session_id", "")),
+                    "ended_at": now,
+                    "guard_until": now,
+                    "updated_at": now,
+                },
+            )
+
+    def request_session_end(
+        self,
+        session_id: str = "",
+        user_text: str = "",
+        command: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Invalidate current work and ask the dialogue node to close the session."""
+        payload = command or self.begin(session_id=session_id)
+        with _COMMAND_LOCK:
+            generation = int(payload.get("generation", -1))
+            if generation != self.current_generation():
+                raise RuntimeError(
+                    f"stale interrupt generation={generation} current={self.current_generation()}"
+                )
+            session_payload = {
+                "command": "end_session",
+                "request_id": str(payload.get("request_id", uuid.uuid4().hex)),
+                "generation": generation,
+                "session_id": str(session_id or payload.get("session_id", "")),
+                "user_text": str(user_text),
+                "updated_at": time.time(),
+            }
+            self._atomic_write(self.session_command_path, session_payload)
+        return session_payload
 
     @staticmethod
     def _read_json(path: Path) -> dict[str, Any]:

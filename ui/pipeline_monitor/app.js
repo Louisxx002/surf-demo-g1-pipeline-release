@@ -11,6 +11,7 @@ const sessionStatus = document.querySelector("#sessionStatus");
 const startPipelineButton = document.querySelector("#startPipelineButton");
 const stopPipelineButton = document.querySelector("#stopPipelineButton");
 const interruptPipelineButton = document.querySelector("#interruptPipelineButton");
+const endSessionButton = document.querySelector("#endSessionButton");
 const readinessList = document.querySelector("#readinessList");
 
 const maxEvents = 240;
@@ -214,6 +215,7 @@ function setPipelineBusy(isBusy) {
   startPipelineButton.disabled = isBusy;
   stopPipelineButton.disabled = isBusy;
   interruptPipelineButton.disabled = isBusy || currentPipelineState !== "running";
+  endSessionButton.disabled = isBusy || currentPipelineState !== "running";
 }
 
 function updatePipelineStatus(payload) {
@@ -222,7 +224,9 @@ function updatePipelineStatus(payload) {
   pipelineStatus.textContent = `Pipeline: ${state}`;
   pipelineStatus.className = `status ${state === "running" ? "ok" : state === "partial" ? "partial" : state === "stopped" ? "" : "error"}`;
   interruptPipelineButton.disabled = state !== "running";
+  endSessionButton.disabled = state !== "running";
   if (pipelineBusy) interruptPipelineButton.disabled = true;
+  if (pipelineBusy) endSessionButton.disabled = true;
   renderReadiness(payload || {});
 }
 
@@ -361,6 +365,29 @@ async function runPipelineInterrupt() {
   }
 }
 
+async function runPipelineEndSession() {
+  setPipelineBusy(true);
+  setSessionStatus("正在关闭", "partial");
+  try {
+    const response = await fetch("/api/pipeline/end-session", { method: "POST" });
+    const payload = await response.json();
+    if (payload.ok) {
+      setSessionStatus("正在播放结束语", "partial");
+    } else if (payload.partial) {
+      setSessionStatus("关闭中，机器人复位未完成", "partial");
+    } else {
+      setSessionStatus("关闭失败", "partial");
+    }
+    await loadSnapshot();
+  } catch (error) {
+    addEvent({ kind: "system", title: "ERROR", message: `关闭会话失败：${String(error)}` });
+    setSessionStatus("关闭失败", "partial");
+  } finally {
+    await refreshPipelineStatus();
+    setPipelineBusy(false);
+  }
+}
+
 function compactCommandOutput(value) {
   if (!value) return "";
   return String(value).split(/\r?\n/).filter(Boolean).slice(-3).join(" | ");
@@ -468,6 +495,7 @@ clearButton.addEventListener("click", () => {
 startPipelineButton.addEventListener("click", () => runPipelineAction("start"));
 stopPipelineButton.addEventListener("click", () => runPipelineAction("stop"));
 interruptPipelineButton.addEventListener("click", runPipelineInterrupt);
+endSessionButton.addEventListener("click", runPipelineEndSession);
 
 loadSnapshot()
   .catch((error) => addEvent({ kind: "system", title: "ERROR", message: String(error) }))

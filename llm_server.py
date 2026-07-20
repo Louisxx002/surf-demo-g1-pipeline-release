@@ -496,7 +496,20 @@ def _trim_reply_for_brief_mode(reply, user_text):
     if len(text) <= max_chars:
         return text
 
-    sentence_parts = re.split(r"(?<=[。！？!?；;\n])", text)
+    sentence_parts = [part.strip() for part in re.split(r"(?<=[。！？!?；;\n])", text) if part.strip()]
+    if len(sentence_parts) > 1:
+        lead = re.sub(r"[^a-z']+", " ", sentence_parts[0].lower()).strip()
+        low_information_leads = (
+            "sure",
+            "sure thing",
+            "of course",
+            "absolutely",
+            "no worries",
+            "ah my apologies for the pause",
+            "let me fix that",
+        )
+        if any(lead == phrase or lead.startswith(f"{phrase} ") for phrase in low_information_leads):
+            sentence_parts = sentence_parts[1:]
     kept = []
     total = 0
     first_part = ""

@@ -356,7 +356,18 @@ while True:
                     _set_light("blue", 0, 0, 255)
                     print("reply playback started -> blue", flush=True)
 
-            _write_tts_guard(True, play_kind, play_text, play_session_id)
+            _write_tts_guard(
+                True,
+                play_kind,
+                play_text,
+                play_session_id,
+                {
+                    "wav_duration_sec": wav_duration_sec,
+                    "estimated_audio_end_at": estimated_audio_end_at,
+                    "safe_audio_end_at": safe_audio_end_at,
+                    "guard_until": safe_audio_end_at,
+                },
+            )
             playback_error_recorded = False
             try:
                 if _interrupt_control.generation_changed(play_generation):

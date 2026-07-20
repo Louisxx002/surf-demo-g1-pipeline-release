@@ -772,6 +772,70 @@ def run_pipeline_interrupt(
     }
 
 
+def run_pipeline_end_session(
+    logs_dir: Path = DEFAULT_LOGS_DIR,
+    pipeline_running_checker: Any = _pipeline_services_running,
+    relay_client_factory: Any = _make_robot_relay_client,
+    interrupt_control: InterruptControl | None = None,
+) -> dict[str, Any]:
+    if not pipeline_running_checker():
+        return {"ok": False, "partial": False, "error": "pipeline_not_running"}
+
+    latest_log = find_latest_pipeline_log(logs_dir)
+    session_id = latest_log.parent.name if latest_log is not None else ""
+    control = interrupt_control or InterruptControl(PROJECT_ROOT / "runtime")
+    command = control.begin(session_id=session_id)
+    generation = int(command["generation"])
+    errors: list[str] = []
+    stop_audio: dict[str, Any] | None = None
+    release_arm: dict[str, Any] | None = None
+
+    try:
+        relay = relay_client_factory()
+        stop_audio = relay.stop_audio("tts", generation=generation)
+        if not isinstance(stop_audio, dict) or int(stop_audio.get("ret", -1)) != 0:
+            errors.append(f"stop_audio returned ret={stop_audio.get('ret', 'missing') if isinstance(stop_audio, dict) else 'invalid'}")
+        release_arm = relay.release_arm(generation=generation)
+        if not isinstance(release_arm, dict) or int(release_arm.get("ret", -1)) != 0:
+            errors.append(f"release_arm returned ret={release_arm.get('ret', 'missing') if isinstance(release_arm, dict) else 'invalid'}")
+    except Exception as exc:
+        errors.append(str(exc))
+
+    try:
+        command = control.request_session_end(
+            session_id=session_id,
+            user_text="",
+            command=command,
+        )
+    except Exception as exc:
+        errors.append(f"request_session_end: {exc}")
+
+    if latest_log is not None:
+        event = {
+            "time": datetime.now().isoformat(timespec="milliseconds"),
+            "stage": "manual_session_end",
+            "session_id": session_id,
+            "request_id": command["request_id"],
+            "generation": generation,
+            "partial": bool(errors),
+            "errors": errors,
+        }
+        with latest_log.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    return {
+        "ok": not errors,
+        "partial": bool(errors),
+        "message": "正在关闭当前会话" if not errors else "会话已请求关闭，但机器人停音或复位未完成",
+        "session_id": session_id,
+        "request_id": command["request_id"],
+        "generation": generation,
+        "stop_audio": stop_audio,
+        "release_arm": release_arm,
+        "errors": errors,
+    }
+
+
 def _json_response(handler: BaseHTTPRequestHandler, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
@@ -819,6 +883,8 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                 self._run_pipeline_action("stop")
             elif parsed.path == "/api/pipeline/interrupt":
                 self._run_pipeline_interrupt()
+            elif parsed.path == "/api/pipeline/end-session":
+                self._run_pipeline_end_session()
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -901,6 +967,23 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
         def _run_pipeline_interrupt(self) -> None:
             try:
                 payload = run_pipeline_interrupt(logs_dir=logs_dir)
+                if payload.get("error") == "pipeline_not_running":
+                    status = HTTPStatus.CONFLICT
+                elif payload.get("ok") or payload.get("partial"):
+                    status = HTTPStatus.OK
+                else:
+                    status = HTTPStatus.INTERNAL_SERVER_ERROR
+                _json_response(self, payload, status)
+            except Exception as exc:  # pragma: no cover - defensive UI endpoint
+                _json_response(
+                    self,
+                    {"ok": False, "partial": False, "error": str(exc)},
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+
+        def _run_pipeline_end_session(self) -> None:
+            try:
+                payload = run_pipeline_end_session(logs_dir=logs_dir)
                 if payload.get("error") == "pipeline_not_running":
                     status = HTTPStatus.CONFLICT
                 elif payload.get("ok") or payload.get("partial"):

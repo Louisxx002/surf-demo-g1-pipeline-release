@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NODE_SOURCE = (ROOT / "llm_surf_context_node.py").read_text(encoding="utf-8")
 PLAYER_SOURCE = (ROOT / "unitree_audio_player.py").read_text(encoding="utf-8")
+PLAYER_SOURCE_COMPACT = "".join(PLAYER_SOURCE.split())
 
 
 def test_llm_turn_discards_results_from_an_older_interrupt_generation():
@@ -25,7 +26,14 @@ def test_audio_player_aborts_stale_playback_completion_work():
     assert '"tts_play_interrupted"' in PLAYER_SOURCE
     assert "generation=play_generation" in PLAYER_SOURCE
     assert "relay playback rejected or failed" in PLAYER_SOURCE
-    assert "except Exception as exc:" in PLAYER_SOURCE.split("_write_tts_guard(True", 1)[1]
+    assert "exceptExceptionasexc:" in PLAYER_SOURCE_COMPACT.split(
+        "_write_tts_guard(True", 1
+    )[1]
+
+
+def test_active_tts_guard_includes_the_expected_playback_deadline():
+    active_guard_call = PLAYER_SOURCE_COMPACT.split("_write_tts_guard(True", 1)[1].split(")", 1)[0]
+    assert '"guard_until":safe_audio_end_at' in active_guard_call
 
 
 def test_relay_backend_does_not_report_cancelled_or_failed_wav_as_success():

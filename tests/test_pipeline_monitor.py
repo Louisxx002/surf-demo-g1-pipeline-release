@@ -20,6 +20,7 @@ from pipeline_monitor.server import (
     read_existing_events,
     robot_mic_status,
     run_pipeline_command,
+    run_pipeline_end_session,
     run_pipeline_interrupt,
 )
 from http.server import ThreadingHTTPServer
@@ -547,6 +548,60 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
             "function compactCommandOutput", 1
         )[0]
         self.assertNotIn("addEvent({", interrupt_handler.split("catch (error)", 1)[0])
+
+    def test_run_pipeline_end_session_stops_output_and_requests_node_termination(self):
+        calls = []
+
+        class FakeRelayClient:
+            def stop_audio(self, app_name, generation=None):
+                calls.append(("stop_audio", app_name, generation))
+                return {"ok": True, "ret": 0}
+
+            def release_arm(self, generation=None):
+                calls.append(("release_arm", generation))
+                return {"ok": True, "ret": 0}
+
+        class FakeControl:
+            def begin(self, session_id):
+                calls.append(("begin", session_id))
+                return {"request_id": "end-1", "generation": 9, "session_id": session_id}
+
+            def request_session_end(self, session_id, user_text="", command=None):
+                calls.append(("request_session_end", session_id, user_text, command["generation"]))
+                return {"request_id": "end-1", "generation": 9, "session_id": session_id}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            logs_dir = Path(tmp) / "logs"
+            log_path = logs_dir / "20260718_010203_s001" / "pipeline.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text('{"stage":"llm_reply"}\n', encoding="utf-8")
+
+            result = run_pipeline_end_session(
+                logs_dir=logs_dir,
+                pipeline_running_checker=lambda: True,
+                relay_client_factory=lambda: FakeRelayClient(),
+                interrupt_control=FakeControl(),
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(
+                calls,
+                [
+                    ("begin", "20260718_010203_s001"),
+                    ("stop_audio", "tts", 9),
+                    ("release_arm", 9),
+                    ("request_session_end", "20260718_010203_s001", "", 9),
+                ],
+            )
+
+    def test_monitor_ui_exposes_end_session_control(self):
+        project_root = Path(__file__).resolve().parents[1]
+        html = (project_root / "ui/pipeline_monitor/index.html").read_text(encoding="utf-8")
+        javascript = (project_root / "ui/pipeline_monitor/app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="endSessionButton"', html)
+        self.assertIn("关闭会话", html)
+        self.assertIn('fetch("/api/pipeline/end-session"', javascript)
 
 
 if __name__ == "__main__":

@@ -110,3 +110,25 @@ def test_wait_until_returns_true_when_deadline_is_reached(tmp_path):
     generation = control.current_generation()
 
     assert control.wait_until(time.time() + 0.01, generation, poll_sec=0.002) is True
+
+
+def test_playback_active_reads_live_tts_guard(tmp_path):
+    control = InterruptControl(tmp_path)
+    (tmp_path / "tts_guard.json").write_text(
+        json.dumps({"active": True, "guard_until": time.time() + 5}),
+        encoding="utf-8",
+    )
+
+    assert control.playback_active() is True
+
+
+def test_request_session_end_writes_generation_without_opening_listening(tmp_path):
+    control = InterruptControl(tmp_path)
+
+    command = control.request_session_end(session_id="s001", user_text="")
+
+    payload = json.loads((tmp_path / "session_command.json").read_text(encoding="utf-8"))
+    assert payload["command"] == "end_session"
+    assert payload["session_id"] == "s001"
+    assert payload["generation"] == command["generation"]
+    assert not (tmp_path / "followup_control.json").exists()

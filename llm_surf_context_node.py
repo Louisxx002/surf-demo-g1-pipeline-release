@@ -81,12 +81,16 @@ class LlmSurfContextNode(Node):
         self._standby_ack_event_mtime = 0.0
         self._standby_ack_event_updated_at = 0.0
         self._interrupt_control = InterruptControl(CONFIG.runtime_dir)
+        self._last_session_command_request_id = str(
+            self._interrupt_control.read_session_command().get("request_id", "")
+        )
 
         self.create_subscription(String, CONFIG.ros_audio_topic, self.on_audio_msg, 10)
         self.create_subscription(String, CONFIG.surf_wake_topic, self.on_wake, 10)
         self.create_subscription(Bool, CONFIG.surf_vad_topic, self.on_vad, 10)
         self.create_subscription(String, CONFIG.surf_speaker_topic, self.on_speaker, 10)
         self.create_timer(0.2, self._poll_wake_listen_timeout)
+        self.create_timer(0.2, self._poll_session_command)
         self.create_timer(0.3, self._poll_standby_ack_event)
 
         CONFIG.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -124,6 +128,7 @@ class LlmSurfContextNode(Node):
         payload = self._decode_json_payload(msg.data)
         wake_word = str(payload.get("word", msg.data)).strip()
         session_id = str(payload.get("session_id", "")).strip()
+        self._interrupt_active_reply_for_wake(session_id)
         self._close_followup_window("new_wake")
         self._attach_session(session_id or None)
         self.surf_context.wake_word = wake_word
@@ -138,6 +143,74 @@ class LlmSurfContextNode(Node):
         self._wake_ack_guard_until = time.monotonic() + max(0.0, CONFIG.wake_ack_guard_sec)
         self.get_logger().info(
             f"wake_ack guard armed until={self._wake_ack_guard_until:.3f} sec={CONFIG.wake_ack_guard_sec:.2f}"
+        )
+
+    def _interrupt_active_reply_for_wake(self, session_id: str) -> bool:
+        if not self._interrupt_control.playback_active():
+            return False
+
+        command = self._interrupt_control.begin(session_id=session_id)
+        generation = int(command["generation"])
+        errors: list[str] = []
+        try:
+            from robot_relay.robot_relay_client import RobotRelayClient
+
+            relay = RobotRelayClient(
+                CONFIG.robot_relay_host,
+                CONFIG.robot_relay_port,
+                timeout_sec=CONFIG.robot_relay_timeout_sec,
+            )
+            stop_audio = relay.stop_audio("tts", generation=generation)
+            if int(stop_audio.get("ret", -1)) != 0:
+                errors.append(f"stop_audio ret={stop_audio.get('ret', 'missing')}")
+            release_arm = relay.release_arm(generation=generation)
+            if int(release_arm.get("ret", -1)) != 0:
+                errors.append(f"release_arm ret={release_arm.get('ret', 'missing')}")
+        except Exception as exc:
+            errors.append(str(exc))
+
+        try:
+            self._interrupt_control.clear_playback_guard(command, kind="wake_interrupt")
+        except Exception as exc:
+            errors.append(f"clear_guard: {exc}")
+
+        self._session_record(
+            "wake_interrupt",
+            session_id=session_id or self._session_id,
+            generation=generation,
+            errors=errors,
+        )
+        if errors:
+            self.get_logger().warn(f"Wake interrupt completed with warnings: {errors}")
+        else:
+            self.get_logger().info("Wake word interrupted active reply; acknowledging new wake.")
+        return True
+
+    def _poll_session_command(self) -> None:
+        command = self._interrupt_control.read_session_command()
+        request_id = str(command.get("request_id", ""))
+        if not request_id or request_id == self._last_session_command_request_id:
+            return
+        self._last_session_command_request_id = request_id
+        if command.get("command") != "end_session":
+            return
+
+        session_id = str(command.get("session_id", "")).strip()
+        request_session_id = (
+            self._conversation_session_id
+            or self._session_id
+            or session_id
+            or self._fallback_session_id()
+        )
+        self._session_record(
+            "manual_session_end_received",
+            request_id=request_id,
+            generation=command.get("generation", 0),
+            session_id=request_session_id,
+        )
+        self._handle_terminate_command(
+            request_session_id,
+            str(command.get("user_text", "")),
         )
 
     def on_vad(self, msg: Bool) -> None:
