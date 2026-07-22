@@ -41,7 +41,9 @@ class PipelineMonitorTests(unittest.TestCase):
                 pipeline_state_getter=lambda: "stopped",
             )
             self.assertTrue(result["ok"])
-            self.assertEqual(turn_mode_status(runtime_dir=runtime_dir)["mode"], "smart")
+            status = turn_mode_status(runtime_dir=runtime_dir)
+            self.assertEqual(status["mode"], "smart")
+            self.assertEqual(status["label"], "允许停顿")
 
             blocked = update_turn_mode(
                 "basic",
@@ -769,7 +771,7 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
         self.assertIn("关闭会话", html)
         self.assertIn('fetch("/api/pipeline/end-session"', javascript)
 
-    def test_monitor_ui_exposes_short_turn_mode_toggle_and_current_mode(self):
+    def test_monitor_ui_exposes_fast_and_pause_turn_mode_toggle(self):
         project_root = Path(__file__).resolve().parents[1]
         html = (project_root / "ui/pipeline_monitor/index.html").read_text(encoding="utf-8")
         javascript = (project_root / "ui/pipeline_monitor/app.js").read_text(encoding="utf-8")
@@ -777,8 +779,11 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
         self.assertIn('id="turnModeBasic"', html)
         self.assertIn('id="turnModeSmart"', html)
         self.assertIn('id="turnModeCurrent"', html)
-        self.assertIn(">基础<", html)
-        self.assertIn(">智能<", html)
+        self.assertIn("模式：快速转写", html)
+        self.assertIn(">快速<", html)
+        self.assertIn(">停顿<", html)
+        self.assertNotIn(">基础<", html)
+        self.assertNotIn(">智能<", html)
         self.assertIn('fetch("/api/turn-mode")', javascript)
         self.assertIn('fetch("/api/turn-mode",', javascript)
 

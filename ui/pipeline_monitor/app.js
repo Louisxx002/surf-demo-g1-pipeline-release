@@ -227,7 +227,7 @@ function setPipelineBusy(isBusy) {
 function updateTurnModeControls() {
   const canSwitch = currentPipelineState === "stopped" && !pipelineBusy && !turnModeBusy;
   const isBasic = currentTurnMode === "basic";
-  turnModeCurrent.textContent = `模式：${isBasic ? "基础" : "智能"}`;
+  turnModeCurrent.textContent = `模式：${isBasic ? "快速转写" : "允许停顿"}`;
   turnModeBasic.classList.toggle("active", isBasic);
   turnModeSmart.classList.toggle("active", !isBasic);
   turnModeBasic.setAttribute("aria-pressed", String(isBasic));
@@ -367,7 +367,7 @@ async function setTurnMode(mode) {
     addEvent({
       kind: "state",
       title: "TURN_MODE",
-      message: `已切换为${currentTurnMode === "basic" ? "基础" : "智能"}模式`,
+      message: `已切换为${currentTurnMode === "basic" ? "快速转写" : "允许停顿"}模式`,
     });
   } catch (error) {
     addEvent({ kind: "system", title: "ERROR", message: `切换轮次模式失败：${String(error)}` });

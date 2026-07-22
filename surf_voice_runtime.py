@@ -84,8 +84,8 @@ class SurfVoiceRuntime:
         self._turn_mode_store = TurnModeStore(runtime_dir / "turn_mode.json")
         self._endpoint_controller = RecordingEndpointController(
             smart_pause_grace_sec=_env_float(
-                "VOICE_SMART_ENDPOINT_GRACE_SEC",
-                0.8,
+                "VOICE_PAUSE_ENDPOINT_GRACE_SEC",
+                _env_float("VOICE_SMART_ENDPOINT_GRACE_SEC", 0.8),
             )
         )
         self._asr_audio_frames: list[bytes] = []

@@ -64,7 +64,11 @@ TURN_MODE_FILENAME = "turn_mode.json"
 def turn_mode_status(runtime_dir: Path | None = None) -> dict[str, Any]:
     root = runtime_dir or (PROJECT_ROOT / "runtime")
     mode = TurnModeStore(root / TURN_MODE_FILENAME).read()
-    return {"ok": True, "mode": mode, "label": "基础" if mode == "basic" else "智能"}
+    return {
+        "ok": True,
+        "mode": mode,
+        "label": "快速转写" if mode == "basic" else "允许停顿",
+    }
 
 
 def update_turn_mode(
