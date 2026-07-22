@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 
 from pipeline_log.latency_tracker import read_turn_summaries
 from pipeline_control.interrupt import InterruptControl
+from turn_detection.mode_control import TurnModeStore, normalize_mode
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -38,7 +39,7 @@ PIPELINE_ENV_DEFAULTS = {
     "VOICE_AUDIO_SOURCE": "robot",
     "VOICE_ROBOT_MIC_IF": "192.168.123.225",
     "VOICE_ROBOT_MIC_PORT": "5556",
-    "ROBOT_MIC_PROCESSING_MODE": "mean4",
+    "ROBOT_MIC_PROCESSING_MODE": "beamformer",
     "ROBOT_MIC_SOURCE_CHANNELS": "8",
     "ROBOT_MIC_CHANNEL_MAP": "0,1,2,3",
     "LLM_ACTION_EXECUTE": "1",
@@ -57,10 +58,39 @@ ROBOT_MIC_DEVICE_NAME = "Bothlent UAC Dongle"
 ROBOT_MIC_RUNTIME_ROOT = "/home/unitree/surf_robot_mic"
 ROBOT_MIC_SCRIPT = f"{ROBOT_MIC_RUNTIME_ROOT}/tools/stream_usb_mic.py"
 ROBOT_MIC_FILTER = f"{ROBOT_MIC_RUNTIME_ROOT}/filters/DCF_Targ7_runtime.npz"
+TURN_MODE_FILENAME = "turn_mode.json"
+
+
+def turn_mode_status(runtime_dir: Path | None = None) -> dict[str, Any]:
+    root = runtime_dir or (PROJECT_ROOT / "runtime")
+    mode = TurnModeStore(root / TURN_MODE_FILENAME).read()
+    return {"ok": True, "mode": mode, "label": "基础" if mode == "basic" else "智能"}
+
+
+def update_turn_mode(
+    mode: str,
+    *,
+    runtime_dir: Path | None = None,
+    pipeline_state_getter: Any | None = None,
+) -> dict[str, Any]:
+    try:
+        normalized = normalize_mode(mode)
+    except ValueError as exc:
+        return {"ok": False, "error": "invalid_mode", "detail": str(exc)}
+
+    state_getter = pipeline_state_getter or (lambda: pipeline_status()["state"])
+    state = str(state_getter())
+    if state != "stopped":
+        return {"ok": False, "error": "session_active", "pipeline_state": state}
+
+    root = runtime_dir or (PROJECT_ROOT / "runtime")
+    TurnModeStore(root / TURN_MODE_FILENAME).write(normalized)
+    return {"ok": True, "mode": normalized, "pipeline_state": state}
 
 
 def _robot_mic_settings() -> dict[str, str]:
-    mode = os.environ.get("ROBOT_MIC_PROCESSING_MODE", PIPELINE_ENV_DEFAULTS["ROBOT_MIC_PROCESSING_MODE"])
+    # Turn-detection A/B tests must share the same audio front end.
+    mode = PIPELINE_ENV_DEFAULTS["ROBOT_MIC_PROCESSING_MODE"]
     channels = os.environ.get("ROBOT_MIC_SOURCE_CHANNELS", PIPELINE_ENV_DEFAULTS["ROBOT_MIC_SOURCE_CHANNELS"])
     channel_map = os.environ.get("ROBOT_MIC_CHANNEL_MAP", PIPELINE_ENV_DEFAULTS["ROBOT_MIC_CHANNEL_MAP"])
     if mode not in {"mean4", "beamformer"}:
@@ -940,6 +970,8 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                 self._serve_shadow(limit=limit)
             elif parsed.path == "/api/pipeline/status":
                 self._serve_pipeline_status()
+            elif parsed.path == "/api/turn-mode":
+                _json_response(self, turn_mode_status())
             elif parsed.path == "/events":
                 self._serve_sse()
             else:
@@ -955,6 +987,8 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                 self._run_pipeline_interrupt()
             elif parsed.path == "/api/pipeline/end-session":
                 self._run_pipeline_end_session()
+            elif parsed.path == "/api/turn-mode":
+                self._update_turn_mode()
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -1042,6 +1076,25 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                 _json_response(self, pipeline_status())
             except Exception as exc:  # pragma: no cover - defensive UI endpoint
                 _json_response(self, {"ok": False, "state": "error", "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+        def _update_turn_mode(self) -> None:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                result = update_turn_mode(str(payload.get("mode", "")))
+                if result.get("ok"):
+                    status = HTTPStatus.OK
+                elif result.get("error") == "session_active":
+                    status = HTTPStatus.CONFLICT
+                else:
+                    status = HTTPStatus.BAD_REQUEST
+                _json_response(self, result, status)
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                _json_response(
+                    self,
+                    {"ok": False, "error": "invalid_request", "detail": str(exc)},
+                    HTTPStatus.BAD_REQUEST,
+                )
 
         def _run_pipeline_action(self, action: str) -> None:
             try:

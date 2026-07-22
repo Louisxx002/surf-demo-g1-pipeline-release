@@ -13,8 +13,9 @@ const stopPipelineButton = document.querySelector("#stopPipelineButton");
 const interruptPipelineButton = document.querySelector("#interruptPipelineButton");
 const endSessionButton = document.querySelector("#endSessionButton");
 const readinessList = document.querySelector("#readinessList");
-const shadowStatus = document.querySelector("#shadowStatus");
-const shadowComparisons = document.querySelector("#shadowComparisons");
+const turnModeCurrent = document.querySelector("#turnModeCurrent");
+const turnModeBasic = document.querySelector("#turnModeBasic");
+const turnModeSmart = document.querySelector("#turnModeSmart");
 
 const maxEvents = 240;
 const turnItems = new Map();
@@ -23,6 +24,8 @@ const seenEventKeys = new Set();
 let pipelineBusy = false;
 let currentPipelineState = "unknown";
 let currentLogPath = "";
+let currentTurnMode = "basic";
+let turnModeBusy = false;
 
 function formatTime(value) {
   if (!value) return "--:--:--";
@@ -197,88 +200,8 @@ function resetMonitorData(nextLogPath = "") {
   lastAsr.textContent = "-";
   lastLlm.textContent = "-";
   lastAction.textContent = "-";
-  renderShadowComparisons([], false);
   currentLogPath = nextLogPath;
   if (nextLogPath) logPath.textContent = nextLogPath;
-}
-
-function shadowDecisionLabel(value) {
-  const labels = {
-    CONTINUE_SPEAKING: "继续说话",
-    END_OF_TURN: "轮次结束",
-    TRUE_INTERRUPT: "真实打断",
-    BACKCHANNEL: "附和",
-    UNCERTAIN: "不确定",
-  };
-  return labels[value] || value || "-";
-}
-
-function renderShadowDetector(name, detector) {
-  const item = document.createElement("div");
-  item.className = "shadow-detector";
-  const header = document.createElement("div");
-  header.className = "shadow-detector-head";
-  const label = document.createElement("strong");
-  label.textContent = name === "baseline" ? "当前规则" : name;
-  const latency = document.createElement("span");
-  latency.textContent = `${Number(detector?.latency_ms || 0).toFixed(2)} ms`;
-  header.append(label, latency);
-
-  const decision = document.createElement("div");
-  decision.className = "shadow-decision";
-  decision.textContent = shadowDecisionLabel(detector?.decision);
-  const detail = document.createElement("p");
-  const confidence = Number(detector?.confidence || 0);
-  detail.textContent = `置信度 ${confidence.toFixed(2)} · ${detector?.reason || "无说明"}`;
-  item.append(header, decision, detail);
-  return item;
-}
-
-function renderShadowComparisons(comparisons, enabled) {
-  if (!shadowComparisons || !shadowStatus) return;
-  shadowStatus.textContent = enabled ? "观察中" : "未启用";
-  shadowStatus.className = `shadow-status ${enabled ? "enabled" : ""}`.trim();
-
-  const rows = comparisons || [];
-  if (!rows.length) {
-    const empty = document.createElement("p");
-    empty.className = "shadow-empty";
-    empty.textContent = enabled ? "等待本轮观察数据" : "当前会话没有 Shadow 数据";
-    shadowComparisons.replaceChildren(empty);
-    return;
-  }
-
-  const fragment = document.createDocumentFragment();
-  for (const comparison of rows) {
-    const row = document.createElement("article");
-    row.className = `shadow-row ${comparison.agreement ? "agrees" : "differs"}`;
-    const context = document.createElement("div");
-    context.className = "shadow-context";
-    const text = document.createElement("strong");
-    text.textContent = comparison.text || "（无转写）";
-    const state = document.createElement("span");
-    state.textContent = comparison.agreement ? "一致" : "存在差异";
-    context.append(text, state);
-
-    const detectorGrid = document.createElement("div");
-    detectorGrid.className = "shadow-detector-grid";
-    for (const [name, detector] of Object.entries(comparison.detectors || {})) {
-      detectorGrid.appendChild(renderShadowDetector(name, detector));
-    }
-    row.append(context, detectorGrid);
-    fragment.appendChild(row);
-  }
-  shadowComparisons.replaceChildren(fragment);
-}
-
-async function refreshShadowComparisons() {
-  try {
-    const response = await fetch("/api/shadow?limit=8");
-    const payload = await response.json();
-    renderShadowComparisons(payload.comparisons || [], Boolean(payload.enabled));
-  } catch (error) {
-    renderShadowComparisons([], false);
-  }
 }
 
 function switchLogIfNeeded(nextLogPath) {
@@ -298,6 +221,19 @@ function setPipelineBusy(isBusy) {
   stopPipelineButton.disabled = isBusy;
   interruptPipelineButton.disabled = isBusy || currentPipelineState !== "running";
   endSessionButton.disabled = isBusy || currentPipelineState !== "running";
+  updateTurnModeControls();
+}
+
+function updateTurnModeControls() {
+  const canSwitch = currentPipelineState === "stopped" && !pipelineBusy && !turnModeBusy;
+  const isBasic = currentTurnMode === "basic";
+  turnModeCurrent.textContent = `模式：${isBasic ? "基础" : "智能"}`;
+  turnModeBasic.classList.toggle("active", isBasic);
+  turnModeSmart.classList.toggle("active", !isBasic);
+  turnModeBasic.setAttribute("aria-pressed", String(isBasic));
+  turnModeSmart.setAttribute("aria-pressed", String(!isBasic));
+  turnModeBasic.disabled = !canSwitch || isBasic;
+  turnModeSmart.disabled = !canSwitch || !isBasic;
 }
 
 function updatePipelineStatus(payload) {
@@ -309,6 +245,7 @@ function updatePipelineStatus(payload) {
   endSessionButton.disabled = state !== "running";
   if (pipelineBusy) interruptPipelineButton.disabled = true;
   if (pipelineBusy) endSessionButton.disabled = true;
+  updateTurnModeControls();
   renderReadiness(payload || {});
 }
 
@@ -395,6 +332,49 @@ async function refreshPipelineStatus() {
     updatePipelineStatus(await response.json());
   } catch (error) {
     updatePipelineStatus({ state: "error" });
+  }
+}
+
+async function refreshTurnMode() {
+  try {
+    const response = await fetch("/api/turn-mode");
+    const payload = await response.json();
+    if (payload.ok && (payload.mode === "basic" || payload.mode === "smart")) {
+      currentTurnMode = payload.mode;
+    }
+  } catch (error) {
+    addEvent({ kind: "system", title: "ERROR", message: `读取轮次模式失败：${String(error)}` });
+  } finally {
+    updateTurnModeControls();
+  }
+}
+
+async function setTurnMode(mode) {
+  if (turnModeBusy || currentPipelineState !== "stopped" || mode === currentTurnMode) return;
+  turnModeBusy = true;
+  updateTurnModeControls();
+  try {
+    const response = await fetch("/api/turn-mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    currentTurnMode = payload.mode;
+    addEvent({
+      kind: "state",
+      title: "TURN_MODE",
+      message: `已切换为${currentTurnMode === "basic" ? "基础" : "智能"}模式`,
+    });
+  } catch (error) {
+    addEvent({ kind: "system", title: "ERROR", message: `切换轮次模式失败：${String(error)}` });
+    await refreshTurnMode();
+  } finally {
+    turnModeBusy = false;
+    updateTurnModeControls();
   }
 }
 
@@ -578,14 +558,16 @@ startPipelineButton.addEventListener("click", () => runPipelineAction("start"));
 stopPipelineButton.addEventListener("click", () => runPipelineAction("stop"));
 interruptPipelineButton.addEventListener("click", runPipelineInterrupt);
 endSessionButton.addEventListener("click", runPipelineEndSession);
+turnModeBasic.addEventListener("click", () => setTurnMode("basic"));
+turnModeSmart.addEventListener("click", () => setTurnMode("smart"));
 
 loadSnapshot()
   .catch((error) => addEvent({ kind: "system", title: "ERROR", message: String(error) }))
   .finally(() => {
     refreshPipelineStatus();
-    refreshShadowComparisons();
+    refreshTurnMode();
     connectEvents();
     setInterval(refreshTurns, 2500);
-    setInterval(refreshShadowComparisons, 2500);
     setInterval(refreshPipelineStatus, 5000);
+    setInterval(refreshTurnMode, 5000);
   });

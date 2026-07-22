@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>G1 Pipeline Monitor</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260720-shadow" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260721-turn-mode" />
   </head>
   <body>
     <main class="app">
@@ -16,6 +16,11 @@
         <div class="top-actions">
           <div id="pipelineStatus" class="status">Pipeline: checking</div>
           <div id="sessionStatus" class="status session-status">Session: unknown</div>
+          <div class="turn-mode-control" role="group" aria-label="轮次检测模式">
+            <span id="turnModeCurrent" class="turn-mode-current">模式：基础</span>
+            <button id="turnModeBasic" class="turn-mode-option" type="button" aria-pressed="true">基础</button>
+            <button id="turnModeSmart" class="turn-mode-option" type="button" aria-pressed="false">智能</button>
+          </div>
           <button id="startPipelineButton" type="button">启动 Pipeline</button>
           <button id="stopPipelineButton" type="button">停止 Pipeline</button>
           <button id="interruptPipelineButton" class="interrupt-command" type="button" disabled>
@@ -51,19 +56,6 @@
         </div>
       </section>
 
-      <section id="shadowPanel" class="shadow-panel" aria-label="Shadow 对照">
-        <div class="events-head">
-          <div>
-            <h2>Shadow 对照</h2>
-            <span>只观察，不控制机器人</span>
-          </div>
-          <span id="shadowStatus" class="shadow-status">未启用</span>
-        </div>
-        <div id="shadowComparisons" class="shadow-comparisons">
-          <p class="shadow-empty">当前会话没有 Shadow 数据</p>
-        </div>
-      </section>
-
       <div class="monitor-grid">
         <section class="turns" aria-label="轮次耗时">
           <div class="events-head">
@@ -83,6 +75,6 @@
       </div>
     </main>
 
-    <script src="/static/app.js?v=20260720-shadow"></script>
+    <script src="/static/app.js?v=20260721-turn-mode"></script>
   </body>
 </html>

@@ -95,6 +95,43 @@ h1 {
   min-width: 142px;
 }
 
+.turn-mode-control {
+  display: grid;
+  grid-template-columns: auto 54px 54px;
+  align-items: stretch;
+  min-height: 34px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.turn-mode-current {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.turn-mode-option {
+  border-width: 0 0 0 1px;
+  border-radius: 0;
+  padding: 0 8px;
+  background: transparent;
+}
+
+.turn-mode-option.active {
+  background: color-mix(in srgb, var(--asr) 12%, var(--panel-2));
+  color: var(--asr);
+  font-weight: 650;
+}
+
+.turn-mode-option:disabled.active {
+  opacity: 1;
+}
+
 .status.ok {
   color: var(--asr);
 }
@@ -399,109 +436,6 @@ button:disabled {
   background: #0c4a6e;
 }
 
-.shadow-panel {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-}
-
-.shadow-panel .events-head > div {
-  display: grid;
-  gap: 3px;
-}
-
-.shadow-panel .events-head span,
-.shadow-empty,
-.shadow-detector p {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.shadow-status {
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  color: var(--muted);
-}
-
-.shadow-status.enabled {
-  color: var(--asr);
-}
-
-.shadow-comparisons {
-  display: grid;
-  max-height: 340px;
-  overflow-y: auto;
-}
-
-.shadow-empty {
-  padding: 16px;
-}
-
-.shadow-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1.3fr);
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
-}
-
-.shadow-row:last-child {
-  border-bottom: 0;
-}
-
-.shadow-row.differs {
-  box-shadow: inset 3px 0 0 var(--llm);
-}
-
-.shadow-context {
-  display: grid;
-  align-content: start;
-  gap: 5px;
-  min-width: 0;
-}
-
-.shadow-context strong {
-  overflow-wrap: anywhere;
-}
-
-.shadow-context span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.shadow-row.differs .shadow-context span {
-  color: var(--llm);
-}
-
-.shadow-detector-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.shadow-detector {
-  min-width: 0;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel-2);
-}
-
-.shadow-detector-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.shadow-decision {
-  margin: 6px 0 3px;
-  font-weight: 650;
-}
-
 .event.state .badge,
 .event.standby .badge,
 .event.system .badge {
@@ -535,11 +469,6 @@ button:disabled {
   }
 
   .monitor-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .shadow-row,
-  .shadow-detector-grid {
     grid-template-columns: 1fr;
   }
 

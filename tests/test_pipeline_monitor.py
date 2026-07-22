@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -6,6 +7,7 @@ import urllib.request
 from pathlib import Path
 import sys
 from threading import Thread
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -23,11 +25,32 @@ from pipeline_monitor.server import (
     run_pipeline_command,
     run_pipeline_end_session,
     run_pipeline_interrupt,
+    turn_mode_status,
+    update_turn_mode,
 )
 from http.server import ThreadingHTTPServer
 
 
 class PipelineMonitorTests(unittest.TestCase):
+    def test_turn_mode_store_allows_switch_only_when_pipeline_is_stopped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            result = update_turn_mode(
+                "smart",
+                runtime_dir=runtime_dir,
+                pipeline_state_getter=lambda: "stopped",
+            )
+            self.assertTrue(result["ok"])
+            self.assertEqual(turn_mode_status(runtime_dir=runtime_dir)["mode"], "smart")
+
+            blocked = update_turn_mode(
+                "basic",
+                runtime_dir=runtime_dir,
+                pipeline_state_getter=lambda: "running",
+            )
+            self.assertFalse(blocked["ok"])
+            self.assertEqual(blocked["error"], "session_active")
+
     def test_find_latest_pipeline_log_ignores_default_and_manual_logs(self):
         with tempfile.TemporaryDirectory() as tmp:
             logs_dir = Path(tmp)
@@ -258,7 +281,7 @@ class PipelineMonitorTests(unittest.TestCase):
             self.assertEqual(len(payload["comparisons"]), 1)
             self.assertFalse(payload["comparisons"][0]["agreement"])
 
-    def test_monitor_ui_exposes_read_only_shadow_comparison_panel(self):
+    def test_monitor_ui_does_not_expose_shadow_comparison_panel(self):
         project_root = Path(__file__).resolve().parents[1]
         html = (project_root / "ui/pipeline_monitor/index.html").read_text(
             encoding="utf-8"
@@ -267,11 +290,10 @@ class PipelineMonitorTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn('id="shadowPanel"', html)
-        self.assertIn("Shadow 对照", html)
-        self.assertIn("只观察，不控制机器人", html)
-        self.assertIn('fetch("/api/shadow?limit=8")', javascript)
-        self.assertIn("renderShadowComparisons", javascript)
+        self.assertNotIn('id="shadowPanel"', html)
+        self.assertNotIn("Shadow 对照", html)
+        self.assertNotIn('fetch("/api/shadow?limit=8")', javascript)
+        self.assertNotIn("renderShadowComparisons", javascript)
 
     def test_pipeline_status_reports_running_when_core_services_are_active(self):
         def fake_runner(command, **kwargs):
@@ -353,7 +375,7 @@ class PipelineMonitorTests(unittest.TestCase):
         self.assertEqual(env["SURF_LLM_WAKE_LISTEN_SEC"], "15")
         self.assertEqual(env["LLM_FOLLOWUP_TIMEOUT_SEC"], "15")
         self.assertEqual(env["LLM_REQUEST_TIMEOUT_SEC"], "20")
-        self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_PROCESSING_MODE"], "mean4")
+        self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_PROCESSING_MODE"], "beamformer")
         self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_SOURCE_CHANNELS"], "8")
         self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_CHANNEL_MAP"], "0,1,2,3")
 
@@ -406,10 +428,34 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
         self.assertEqual(calls[0][0][-1], "arecord -l")
         self.assertIn("tream_usb_mic.py", calls[1][0][-1])
         self.assertIn("--device hw:0,0", calls[1][0][-1])
-        self.assertIn("--mode mean4", calls[1][0][-1])
+        self.assertIn("--mode beamformer", calls[1][0][-1])
         self.assertIn("--channels 8", calls[1][0][-1])
         self.assertIn("--channel-map 0,1,2,3", calls[1][0][-1])
-        self.assertEqual(status["processing_mode"], "mean4")
+        self.assertEqual(status["processing_mode"], "beamformer")
+
+    def test_robot_mic_status_keeps_beamformer_when_parent_shell_exports_mean4(self):
+        commands = []
+
+        def fake_runner(command, **kwargs):
+            commands.append(command)
+            if command[-1] == "arecord -l":
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "card 0: Dongle [Bothlent UAC Dongle], device 0: USB Audio [USB Audio]\n",
+                        "stderr": "",
+                    },
+                )()
+            return type("Result", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+
+        with patch.dict(os.environ, {"ROBOT_MIC_PROCESSING_MODE": "mean4"}):
+            status = robot_mic_status(command_runner=fake_runner)
+
+        self.assertEqual(status["processing_mode"], "beamformer")
+        self.assertIn("--mode beamformer", commands[1][-1])
+        self.assertNotIn("--mode mean4", commands[1][-1])
 
     def test_ensure_robot_runtime_starts_relay_and_external_mic(self):
         calls = []
@@ -462,7 +508,7 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
         self.assertIn("--device hw:0,0.*--port 5556", cleanup_command)
         self.assertIn("192.168.123.225", start_command)
         self.assertIn("5556", start_command)
-        self.assertIn("--mode mean4", start_command)
+        self.assertIn("--mode beamformer", start_command)
         self.assertIn("--channels 8", start_command)
         self.assertIn("--channel-map 0,1,2,3", start_command)
         self.assertIn(
@@ -722,6 +768,19 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
         self.assertIn('id="endSessionButton"', html)
         self.assertIn("关闭会话", html)
         self.assertIn('fetch("/api/pipeline/end-session"', javascript)
+
+    def test_monitor_ui_exposes_short_turn_mode_toggle_and_current_mode(self):
+        project_root = Path(__file__).resolve().parents[1]
+        html = (project_root / "ui/pipeline_monitor/index.html").read_text(encoding="utf-8")
+        javascript = (project_root / "ui/pipeline_monitor/app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="turnModeBasic"', html)
+        self.assertIn('id="turnModeSmart"', html)
+        self.assertIn('id="turnModeCurrent"', html)
+        self.assertIn(">基础<", html)
+        self.assertIn(">智能<", html)
+        self.assertIn('fetch("/api/turn-mode")', javascript)
+        self.assertIn('fetch("/api/turn-mode",', javascript)
 
 
 if __name__ == "__main__":

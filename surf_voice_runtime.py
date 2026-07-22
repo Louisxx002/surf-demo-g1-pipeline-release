@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import socket
+import threading
 import time
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from wake_word.wake_word_detector import WakeWordDetector
 from wake_word.wakeup_dispatcher import WakeupDispatcher
 
 from pipeline_log.pipeline_logger import PipelineLogger, SessionLog
+from turn_detection.mode_control import RecordingEndpointController, TurnModeStore
 from turn_detection.runtime_shadow import TurnShadowRuntime
 
 
@@ -77,6 +79,15 @@ class SurfVoiceRuntime:
         self._session_id = ""
         self._started_at = time.time()
         self._recording = False
+        self._recording_lock = threading.Lock()
+        runtime_dir = Path(os.environ.get("LLM_RUNTIME_DIR", "runtime"))
+        self._turn_mode_store = TurnModeStore(runtime_dir / "turn_mode.json")
+        self._endpoint_controller = RecordingEndpointController(
+            smart_pause_grace_sec=_env_float(
+                "VOICE_SMART_ENDPOINT_GRACE_SEC",
+                0.8,
+            )
+        )
         self._asr_audio_frames: list[bytes] = []
         self._asr_t0 = 0.0
         self._bus = AudioBus()
@@ -143,14 +154,13 @@ class SurfVoiceRuntime:
     def spin(self) -> None:
         while True:
             self._poll_followup_control()
+            now = time.monotonic()
             if self._followup_session_id and self._followup_until and time.monotonic() > self._followup_until:
                 self._close_followup_window("timeout")
-            if self._asr_deadline and time.monotonic() > self._asr_deadline:
+            self._poll_recording_endpoint(now=now)
+            if self._asr_deadline and now > self._asr_deadline:
                 logger.info("asr max recording deadline reached; forcing transcription")
-                self._asr_deadline = 0.0
-                self._recording = False
-                self._save_audio()
-                self._asr.stop_and_transcribe()
+                self._finalize_recording("max_recording_deadline")
             time.sleep(max(0.01, CONFIG.followup_control_poll_sec))
 
     def _on_wake(self, word: str) -> None:
@@ -172,8 +182,10 @@ class SurfVoiceRuntime:
         )
         bus_snapshot = self._bus.get_buffer()
         asr_preroll = self._asr_preroll(bus_snapshot)
-        self._recording = True
-        self._asr_audio_frames = asr_preroll
+        self._endpoint_controller.begin(self._turn_mode_store.read())
+        with self._recording_lock:
+            self._asr_audio_frames = asr_preroll
+            self._recording = True
         self._asr.start_recording(initial_audio=b"".join(asr_preroll))
         self._vprint.start_capture(initial_audio=b"".join(bus_snapshot))
         self._asr_t0 = time.monotonic()
@@ -196,11 +208,14 @@ class SurfVoiceRuntime:
                 return
             self._start_followup_recording()
             return
-        if not is_speech and self._recording and time.monotonic() > self._vad_holdoff_until:
-            self._recording = False
-            self._asr_deadline = 0.0
-            self._save_audio()
-            self._asr.stop_and_transcribe()
+        if self._recording:
+            should_finalize = self._endpoint_controller.on_vad(
+                is_speech,
+                now=time.monotonic(),
+                holdoff_until=self._vad_holdoff_until,
+            )
+            if should_finalize:
+                self._finalize_recording("vad_silence")
 
     def _mirror_turn_shadow(self, method_name: str, *args, **kwargs) -> None:
         try:
@@ -256,8 +271,33 @@ class SurfVoiceRuntime:
             )
 
     def _collect_audio(self, pcm: bytes) -> None:
-        if self._recording:
-            self._asr_audio_frames.append(pcm)
+        with self._recording_lock:
+            if self._recording:
+                self._asr_audio_frames.append(pcm)
+
+    def _poll_recording_endpoint(self, *, now: float | None = None) -> bool:
+        if not self._recording:
+            return False
+        current = time.monotonic() if now is None else now
+        if not self._endpoint_controller.poll(
+            now=current,
+            holdoff_until=self._vad_holdoff_until,
+        ):
+            return False
+        return self._finalize_recording("smart_pause_grace_elapsed")
+
+    def _finalize_recording(self, reason: str) -> bool:
+        with self._recording_lock:
+            if not self._recording:
+                return False
+            self._recording = False
+            self._asr_deadline = 0.0
+        logger.info("asr recording finalized: reason=%s", reason)
+        if self._session_log:
+            self._session_log.record("asr_recording_finalized", reason=reason)
+        self._save_audio()
+        self._asr.stop_and_transcribe()
+        return True
 
     def _asr_preroll(self, bus_snapshot: list[bytes]) -> list[bytes]:
         return list(bus_snapshot[-CONFIG.asr_preroll_frames:])
@@ -361,8 +401,10 @@ class SurfVoiceRuntime:
         self._session_log = self._pipeline_logger.attach_session(self._session_id)
         bus_snapshot = self._bus.get_buffer()
         asr_preroll = self._asr_preroll(bus_snapshot)
-        self._recording = True
-        self._asr_audio_frames = asr_preroll
+        self._endpoint_controller.begin(self._turn_mode_store.read())
+        with self._recording_lock:
+            self._asr_audio_frames = asr_preroll
+            self._recording = True
         self._asr.start_recording(initial_audio=b"".join(asr_preroll))
         self._vprint.start_capture(initial_audio=b"".join(bus_snapshot))
         self._asr_t0 = time.monotonic()
