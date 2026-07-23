@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import tempfile
 import time
 import unittest
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline_monitor.server import (
     PIPELINE_ENV_DEFAULTS,
+    PIPELINE_START_TIMEOUT_SEC,
     detect_robot_mic_device,
     event_view,
     ensure_robot_runtime,
@@ -364,6 +366,7 @@ class PipelineMonitorTests(unittest.TestCase):
             "start",
             command_runner=fake_runner,
             robot_runtime_starter=lambda: {"ok": True, "relay_ready": True, "mic_ready": True},
+            services_ready_checker=lambda: True,
         )
 
         self.assertTrue(result["ok"])
@@ -380,6 +383,35 @@ class PipelineMonitorTests(unittest.TestCase):
         self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_PROCESSING_MODE"], "beamformer")
         self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_SOURCE_CHANNELS"], "8")
         self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_CHANNEL_MAP"], "0,1,2,3")
+        self.assertGreaterEqual(calls[0][1]["timeout"], 360)
+
+    def test_run_pipeline_command_reports_start_timeout(self):
+        def fake_runner(command, **kwargs):
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+        result = run_pipeline_command(
+            "start",
+            command_runner=fake_runner,
+            robot_runtime_starter=lambda: {"ok": True, "relay_ready": True, "mic_ready": True},
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["returncode"], -1)
+        self.assertIn(str(PIPELINE_START_TIMEOUT_SEC), result["error"])
+
+    def test_run_pipeline_command_rejects_false_success_when_services_are_not_ready(self):
+        def fake_runner(command, **kwargs):
+            return type("Result", (), {"returncode": 0, "stdout": "started", "stderr": ""})()
+
+        result = run_pipeline_command(
+            "start",
+            command_runner=fake_runner,
+            robot_runtime_starter=lambda: {"ok": True, "relay_ready": True, "mic_ready": True},
+            services_ready_checker=lambda: False,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertIn("未全部就绪", result["error"])
 
     def test_pipeline_defaults_never_fall_back_to_local_or_direct(self):
         self.assertEqual(PIPELINE_ENV_DEFAULTS["UNITREE_BACKEND"], "relay")

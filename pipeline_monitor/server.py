@@ -25,6 +25,8 @@ DEFAULT_LOGS_DIR = PROJECT_ROOT / "logs"
 STATIC_DIR = PROJECT_ROOT / "ui" / "pipeline_monitor"
 IGNORED_LOG_DIRS = {"default", "manual-relay-test"}
 PIPELINE_SERVICES = ("surf-voice-runtime", "surf-llm-node", "surf-llm-audio-player")
+PIPELINE_START_TIMEOUT_SEC = 480
+PIPELINE_STOP_TIMEOUT_SEC = 90
 PIPELINE_COMPONENT_LABELS = {
     "surf-voice-runtime": "语音识别",
     "surf-llm-node": "LLM 对话节点",
@@ -712,6 +714,7 @@ def run_pipeline_command(
     action: str,
     command_runner: Any = subprocess.run,
     robot_runtime_starter: Any = ensure_robot_runtime,
+    services_ready_checker: Any | None = None,
 ) -> dict[str, Any]:
     if action not in {"start", "stop"}:
         raise ValueError(f"Unsupported pipeline action: {action}")
@@ -731,16 +734,34 @@ def run_pipeline_command(
                 "robot_runtime": robot_runtime,
             }
     command = ["./scripts/run_pipeline.sh", "--mode", "wake"] if action == "start" else ["./scripts/stop_pipeline.sh"]
-    result = command_runner(
-        command,
-        cwd=PROJECT_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=90,
-    )
+    timeout_sec = PIPELINE_START_TIMEOUT_SEC if action == "start" else PIPELINE_STOP_TIMEOUT_SEC
+    try:
+        result = command_runner(
+            command,
+            cwd=PROJECT_ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "action": action,
+            "returncode": -1,
+            "stdout": str(exc.stdout or ""),
+            "stderr": str(exc.stderr or ""),
+            "error": f"Pipeline {action} 超过 {timeout_sec} 秒仍未完成",
+            "command": " ".join(command),
+        }
     payload = _completed_process_payload(result)
     payload.update({"ok": payload["returncode"] == 0, "action": action, "command": " ".join(command)})
+    if action == "start" and payload["ok"]:
+        readiness_check = services_ready_checker or _pipeline_services_running
+        if readiness_check():
+            return payload
+        payload["ok"] = False
+        payload["error"] = "Pipeline 启动命令已结束，但本机服务未全部就绪"
     return payload
 
 

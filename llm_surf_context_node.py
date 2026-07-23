@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import wave
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -123,6 +125,7 @@ class LlmSurfContextNode(Node):
             "LLM wake filter: "
             + ("disabled; SURF wake-word gates ASR." if self.force_always_listen else "enabled as a second filter.")
         )
+        threading.Thread(target=self._prewarm_wake_ack_cache, daemon=True).start()
 
     def on_wake(self, msg: String) -> None:
         payload = self._decode_json_payload(msg.data)
@@ -1660,13 +1663,22 @@ class LlmSurfContextNode(Node):
         except Exception as exc:
             self.get_logger().warn(f"TTS play context write failed: {exc}")
 
-    def _request_tts_mp3(self, text: str) -> None:
+    def _request_tts_mp3(self, text: str, output_path=None):
         response = HTTP_SESSION.get(
             self._llm_tts_url(),
             params={"text": text},
             timeout=CONFIG.request_timeout_sec,
         )
         response.raise_for_status()
+        target_path = output_path or CONFIG.tts_mp3_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = target_path.with_name(f".{target_path.name}.{threading.get_ident()}.tmp")
+        temp_path.write_bytes(response.content)
+        os.replace(temp_path, target_path)
+        return target_path
+
+    def _temporary_tts_mp3_path(self):
+        return CONFIG.runtime_dir / f".tts-{threading.get_ident()}-{time.time_ns()}.mp3"
 
     def _prepare_tts_wav(
         self,
@@ -1677,8 +1689,12 @@ class LlmSurfContextNode(Node):
     ) -> bool:
         with self._tts_lock:
             self._write_tts_play_context(kind, text, session_id=session_id, generation=generation)
-            self._request_tts_mp3(text)
-            return self._convert_tts_to_wav()
+            mp3_path = self._temporary_tts_mp3_path()
+            try:
+                self._request_tts_mp3(text, mp3_path)
+                return self._convert_tts_to_wav(input_path=mp3_path)
+            finally:
+                mp3_path.unlink(missing_ok=True)
 
     def _discard_interrupted_turn(self, session_id: str, stage: str) -> None:
         self.get_logger().info(f"discarding stale turn after manual interrupt stage={stage}")
@@ -1753,20 +1769,17 @@ class LlmSurfContextNode(Node):
     def _play_wake_ack(self, ack_text: str) -> None:
         started_at = time.time()
         try:
-            self._write_tts_play_context("wake_ack", ack_text)
-            response = HTTP_SESSION.get(
-                self._llm_tts_url(),
-                params={"text": ack_text},
-                timeout=CONFIG.request_timeout_sec,
-            )
-            response.raise_for_status()
+            with self._tts_lock:
+                self._write_tts_play_context("wake_ack", ack_text)
+                cache_path = self._wake_ack_cache_path(ack_text)
+                if not self._wake_ack_cache_valid(cache_path):
+                    if not self._build_wake_ack_cache(ack_text, cache_path):
+                        self._update_status(last_error="wake_ack_wav_failed", updated_at=time.time())
+                        return
+                self._publish_cached_wake_ack(cache_path)
         except Exception as exc:
             self.get_logger().warn(f"Wake ack TTS request failed: {exc}")
             self._update_status(last_error="wake_ack_tts_failed", updated_at=time.time())
-            return
-
-        if not self._convert_tts_to_wav_locked():
-            self._update_status(last_error="wake_ack_wav_failed", updated_at=time.time())
             return
 
         self._run_wake_ack_action()
@@ -1780,6 +1793,65 @@ class LlmSurfContextNode(Node):
             },
         )
         self._session_record("wake_ack_ready", text=ack_text, session_id=self._session_id)
+
+    def _wake_ack_cache_path(self, ack_text: str):
+        digest = hashlib.sha256(ack_text.encode("utf-8")).hexdigest()[:16]
+        cache_dir = CONFIG.runtime_dir / "tts_cache"
+        return cache_dir / f"wake_ack_{digest}.wav"
+
+    def _publish_cached_wake_ack(self, cache_path) -> None:
+        CONFIG.tts_wav_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = CONFIG.tts_wav_path.with_name(f".{CONFIG.tts_wav_path.name}.wake.tmp")
+        shutil.copyfile(cache_path, temp_path)
+        os.replace(temp_path, CONFIG.tts_wav_path)
+
+    @staticmethod
+    def _wake_ack_cache_valid(cache_path) -> bool:
+        try:
+            with wave.open(str(cache_path), "rb") as wav_file:
+                return (
+                    wav_file.getnchannels() == 1
+                    and wav_file.getsampwidth() == 2
+                    and wav_file.getframerate() == 16000
+                    and wav_file.getnframes() > 0
+                )
+        except (OSError, EOFError, wave.Error):
+            return False
+
+    def _build_wake_ack_cache(self, ack_text: str, cache_path) -> bool:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        mp3_path = self._temporary_tts_mp3_path()
+        wav_path = cache_path.with_name(
+            f".{cache_path.name}.{threading.get_ident()}.{time.time_ns()}.tmp.wav"
+        )
+        try:
+            self._request_tts_mp3(ack_text, mp3_path)
+            if not self._convert_tts_to_wav(wav_path, input_path=mp3_path):
+                return False
+            if not self._wake_ack_cache_valid(wav_path):
+                return False
+            os.replace(wav_path, cache_path)
+            return True
+        finally:
+            mp3_path.unlink(missing_ok=True)
+            wav_path.unlink(missing_ok=True)
+
+    def _prewarm_wake_ack_cache(self) -> None:
+        if not CONFIG.wake_ack_enable:
+            return
+        ack_text = CONFIG.wake_ack_text.strip()
+        if not ack_text:
+            return
+        try:
+            with self._tts_lock:
+                cache_path = self._wake_ack_cache_path(ack_text)
+                if self._wake_ack_cache_valid(cache_path):
+                    return
+                if not self._build_wake_ack_cache(ack_text, cache_path):
+                    raise RuntimeError("wake ack cache conversion failed")
+            self.get_logger().info(f'[TTS] wake_ack cache ready text="{ack_text}"')
+        except Exception as exc:
+            self.get_logger().warn(f'Wake ack cache prewarm failed text="{ack_text}": {exc}')
 
     def _run_wake_ack_action(self) -> None:
         if not CONFIG.wake_ack_action_enable:
@@ -1937,29 +2009,32 @@ class LlmSurfContextNode(Node):
 
     @staticmethod
     def _llm_tts_url() -> str:
-        return CONFIG.llm_server_url.rsplit("/", 1)[0] + "/tts"
+        return CONFIG.llm_server_url.rsplit("/", 1)[0] + "/tts/audio"
 
     def _convert_tts_to_wav_locked(self) -> bool:
         with self._tts_lock:
             return self._convert_tts_to_wav()
 
-    def _convert_tts_to_wav(self) -> bool:
-        if not CONFIG.tts_mp3_path.exists():
-            self.get_logger().error(f"{CONFIG.tts_mp3_path} not found; LLM server did not generate it")
+    def _convert_tts_to_wav(self, output_path=None, input_path=None) -> bool:
+        source_path = input_path or CONFIG.tts_mp3_path
+        if not source_path.exists():
+            self.get_logger().error(f"{source_path} not found; LLM server did not generate it")
             return False
 
+        target_path = output_path or CONFIG.tts_wav_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             subprocess.run(
                 [
                     "ffmpeg",
                     "-y",
                     "-i",
-                    str(CONFIG.tts_mp3_path),
+                    str(source_path),
                     "-ar",
                     "16000",
                     "-ac",
                     "1",
-                    str(CONFIG.tts_wav_path),
+                    str(target_path),
                 ],
                 check=True,
                 stdout=subprocess.DEVNULL,
@@ -1969,11 +2044,11 @@ class LlmSurfContextNode(Node):
             self.get_logger().error(f"ffmpeg conversion failed: {exc}")
             return False
 
-        if not CONFIG.tts_wav_path.exists():
-            self.get_logger().error(f"{CONFIG.tts_wav_path} not generated")
+        if not target_path.exists():
+            self.get_logger().error(f"{target_path} not generated")
             return False
 
-        self.get_logger().info(f"[TTS] wav_ready path={CONFIG.tts_wav_path}")
+        self.get_logger().info(f"[TTS] wav_ready path={target_path}")
         return True
 
     def run_reply_action(

@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.responses import Response
 import edge_tts
 import http.client
 import json
@@ -6,6 +7,7 @@ import os
 import re
 import ssl
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 import time
@@ -243,6 +245,27 @@ async def tts(text, lang):
         voice,
         proxy=_edge_tts_proxy(),
     ).save(str(CONFIG.tts_mp3_path))
+
+
+async def tts_bytes(text: str, lang: str) -> bytes:
+    voice = {
+        "ja": "ja-JP-NanamiNeural",
+        "en": "en-US-AriaNeural",
+        "zh": "zh-CN-XiaoxiaoNeural",
+    }[lang]
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
+            temp_path = Path(temp_file.name)
+        await edge_tts.Communicate(
+            text,
+            voice,
+            proxy=_edge_tts_proxy(),
+        ).save(str(temp_path))
+        return temp_path.read_bytes()
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 async def try_tts(text: str, lang: str) -> tuple[bool, str]:
@@ -714,3 +737,10 @@ async def synthesize_tts(text: str):
     lang = detect_language(reply)
     await tts(reply, lang)
     return {"reply": reply}
+
+
+@app.get("/tts/audio")
+async def synthesize_tts_audio(text: str):
+    reply = clean_text(text)
+    lang = detect_language(reply)
+    return Response(content=await tts_bytes(reply, lang), media_type="audio/mpeg")
