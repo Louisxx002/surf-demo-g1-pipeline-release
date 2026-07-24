@@ -11,8 +11,13 @@ def test_llm_turn_discards_results_from_an_older_interrupt_generation():
     assert "turn_generation = self._interrupt_control.current_generation()" in NODE_SOURCE
     assert "generation_changed(turn_generation)" in NODE_SOURCE
     assert '"stale_turn_discarded"' in NODE_SOURCE
-    callback_block = NODE_SOURCE.split("def on_audio_msg", 1)[1].split("def ", 1)[0]
-    assert callback_block.index("turn_generation =") < callback_block.index("_request_llm(")
+    request_section = NODE_SOURCE.split("llm_started_at = time.time()", 1)[1].split(
+        'reply = str(llm_response.get("reply", "")).strip()', 1
+    )[0]
+    assert request_section.index("threading.Thread(target=request_llm, daemon=True).start()") < request_section.index(
+        "generation_changed(turn_generation)"
+    )
+    assert request_section.count("generation_changed(turn_generation)") >= 1
 
 
 def test_tts_context_carries_interrupt_generation():

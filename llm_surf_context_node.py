@@ -4,6 +4,7 @@ import difflib
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -69,6 +70,7 @@ class LlmSurfContextNode(Node):
         self._wake_light_lock = threading.Lock()
         self._wake_light_client: Any | None = None
         self._last_wake_ack_at = 0.0
+        self._last_thinking_ack_text = ""
         self._wake_listen_until = 0.0
         self._wake_listen_generation = 0
         self._wake_command_started = False
@@ -126,6 +128,7 @@ class LlmSurfContextNode(Node):
             + ("disabled; SURF wake-word gates ASR." if self.force_always_listen else "enabled as a second filter.")
         )
         threading.Thread(target=self._prewarm_wake_ack_cache, daemon=True).start()
+        threading.Thread(target=self._prewarm_thinking_ack_cache, daemon=True).start()
 
     def on_wake(self, msg: String) -> None:
         payload = self._decode_json_payload(msg.data)
@@ -474,17 +477,34 @@ class LlmSurfContextNode(Node):
         self._session_record("thinking", text=user_text, session_id=request_session_id)
         self._run_thinking_action()
         skip_thinking_ack = self._should_skip_thinking_ack_for_action(user_text)
-        if skip_thinking_ack:
-            pass
-        else:
-            queued_thinking_ack = self._maybe_play_thinking_ack(request_session_id)
-            if queued_thinking_ack and CONFIG.thinking_ack_play_gap_sec > 0:
-                self.get_logger().info(
-                    f"thinking_ack play gap sleep={CONFIG.thinking_ack_play_gap_sec:.2f}s"
+        llm_result: dict[str, Any] = {}
+        llm_finished = threading.Event()
+
+        def request_llm() -> None:
+            try:
+                llm_result["response"] = self._request_llm(
+                    llm_text,
+                    session_id=request_session_id,
+                    user_text=user_text,
                 )
-                time.sleep(CONFIG.thinking_ack_play_gap_sec)
-        llm_response = self._request_llm(llm_text, session_id=request_session_id, user_text=user_text)
-        llm_finished_at = time.time()
+            except Exception as exc:
+                llm_result["response"] = {"reply": "", "error": str(exc)}
+            finally:
+                llm_result["finished_at"] = time.time()
+                llm_finished.set()
+
+        # Start the remote request before publishing the local cached warm-up WAV.
+        # Publishing is intentionally local-only and normally completes in milliseconds.
+        threading.Thread(target=request_llm, daemon=True).start()
+        thinking_ack_queued = False
+        if not skip_thinking_ack:
+            thinking_ack_queued = self._maybe_play_thinking_ack(request_session_id, user_text)
+        llm_finished.wait()
+        raw_llm_response = llm_result.get("response")
+        llm_response = raw_llm_response if isinstance(raw_llm_response, dict) else {}
+        llm_finished_at = float(llm_result.get("finished_at", time.time()))
+        if thinking_ack_queued:
+            self._wait_for_thinking_ack_start(request_session_id)
         if self._interrupt_control.generation_changed(turn_generation):
             self._discard_interrupted_turn(request_session_id, "after_llm")
             return
@@ -1736,28 +1756,100 @@ class LlmSurfContextNode(Node):
         self.get_logger().info(f"Wake light command queued: {color_name}.")
         self._update_status(last_wake_light=color_name, last_wake_light_time=time.time())
 
-    def _maybe_play_thinking_ack(self, session_id: str) -> bool:
+    def _maybe_play_thinking_ack(self, session_id: str, user_text: str) -> bool:
         if not CONFIG.thinking_ack_enable:
             return False
-        ack_text = CONFIG.thinking_ack_text.strip()
+        ack_text = self._thinking_ack_text(user_text)
         if not ack_text:
             return False
         return self._play_thinking_ack(ack_text, session_id)
 
+    def _thinking_ack_text(self, user_text: str) -> str:
+        phrases = (
+            CONFIG.thinking_ack_texts_zh
+            if re.search(r"[\u4e00-\u9fff]", user_text)
+            else CONFIG.thinking_ack_texts_en
+        )
+        usable = [phrase.strip() for phrase in phrases if phrase.strip()]
+        if not usable:
+            return CONFIG.thinking_ack_text.strip()
+        alternatives = [phrase for phrase in usable if phrase != self._last_thinking_ack_text]
+        selected = random.choice(alternatives or usable)
+        self._last_thinking_ack_text = selected
+        return selected
+
+    def _thinking_ack_cache_path(self, ack_text: str):
+        digest_input = f"{getattr(CONFIG, 'thinking_ack_cache_version', 'v1')}:{ack_text}"
+        digest = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()[:16]
+        cache_dir = CONFIG.runtime_dir / "tts_cache"
+        return cache_dir / f"thinking_ack_{digest}.wav"
+
+    def _publish_cached_thinking_ack(self, cache_path) -> None:
+        CONFIG.tts_wav_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = CONFIG.tts_wav_path.with_name(f".{CONFIG.tts_wav_path.name}.thinking.tmp")
+        shutil.copyfile(cache_path, temp_path)
+        os.replace(temp_path, CONFIG.tts_wav_path)
+
+    @staticmethod
+    def _thinking_ack_cache_valid(cache_path) -> bool:
+        return LlmSurfContextNode._wake_ack_cache_valid(cache_path)
+
+    def _build_thinking_ack_cache(self, ack_text: str, cache_path) -> bool:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        mp3_path = self._temporary_tts_mp3_path()
+        wav_path = cache_path.with_name(
+            f".{cache_path.name}.{threading.get_ident()}.{time.time_ns()}.tmp.wav"
+        )
+        try:
+            self._request_tts_mp3(ack_text, mp3_path)
+            if not self._convert_tts_to_wav(wav_path, input_path=mp3_path):
+                return False
+            if not self._thinking_ack_cache_valid(wav_path):
+                return False
+            os.replace(wav_path, cache_path)
+            return True
+        finally:
+            mp3_path.unlink(missing_ok=True)
+            wav_path.unlink(missing_ok=True)
+
+    def _prewarm_thinking_ack_cache(self) -> None:
+        if not CONFIG.thinking_ack_enable:
+            return
+        phrases = tuple(CONFIG.thinking_ack_texts_zh) + tuple(CONFIG.thinking_ack_texts_en)
+        for ack_text in dict.fromkeys(phrase.strip() for phrase in phrases if phrase.strip()):
+            try:
+                with self._tts_lock:
+                    cache_path = self._thinking_ack_cache_path(ack_text)
+                    if self._thinking_ack_cache_valid(cache_path):
+                        continue
+                    if not self._build_thinking_ack_cache(ack_text, cache_path):
+                        raise RuntimeError("thinking ack cache conversion failed")
+                self.get_logger().info(f'[TTS] thinking_ack cache ready text="{ack_text}"')
+            except Exception as exc:
+                self.get_logger().warn(
+                    f'Thinking ack cache prewarm failed text="{ack_text}": {exc}'
+                )
+
     def _play_thinking_ack(self, ack_text: str, session_id: str) -> bool:
         started_at = time.time()
         try:
-            tts_ok = self._prepare_tts_wav("thinking_ack", ack_text, session_id=session_id)
+            with self._tts_lock:
+                cache_path = self._thinking_ack_cache_path(ack_text)
+                if not self._thinking_ack_cache_valid(cache_path):
+                    self._session_record(
+                        "thinking_ack_cache_miss",
+                        text=ack_text,
+                        session_id=session_id,
+                    )
+                    return False
+                self._write_tts_play_context("thinking_ack", ack_text, session_id=session_id)
+                self._publish_cached_thinking_ack(cache_path)
         except Exception as exc:
-            self.get_logger().warn(f"Thinking ack TTS request failed: {exc}")
+            self.get_logger().warn(f"Thinking ack cache publish failed: {exc}")
             self._session_record("thinking_ack_failed", text=ack_text, reason=str(exc), session_id=session_id)
             return False
 
-        if not tts_ok:
-            self._session_record("thinking_ack_failed", text=ack_text, reason="wav_failed", session_id=session_id)
-            return False
-
-        self.get_logger().info(f"Thinking ack played: {ack_text}")
+        self.get_logger().info(f"Thinking ack queued from cache: {ack_text}")
         self._session_record(
             "thinking_ack_ready",
             text=ack_text,
@@ -1765,6 +1857,23 @@ class LlmSurfContextNode(Node):
             duration_ms=self._elapsed_ms(started_at, time.time()),
         )
         return True
+
+    def _wait_for_thinking_ack_start(self, session_id: str) -> bool:
+        """Avoid overwriting a just-published warm-up before the player polls it."""
+        deadline = time.monotonic() + 0.35
+        while time.monotonic() < deadline:
+            try:
+                payload = json.loads(CONFIG.tts_guard_path.read_text(encoding="utf-8"))
+                if (
+                    payload.get("active")
+                    and payload.get("kind") == "thinking_ack"
+                    and str(payload.get("session_id", "")) == session_id
+                ):
+                    return True
+            except (OSError, ValueError, json.JSONDecodeError):
+                pass
+            time.sleep(0.02)
+        return False
 
     def _play_wake_ack(self, ack_text: str) -> None:
         started_at = time.time()

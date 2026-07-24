@@ -117,10 +117,25 @@ class ProjectConfig:
             ("我在", "我", "在", "嗯", "啊", "呃", "哦", "好", "好的", "你好", "小浦", "你好小浦", "存在", "准在"),
         )
     )
-    thinking_ack_enable: bool = _env_bool_compat("SURF_LLM_THINKING_ACK_ENABLE", "SURF_QWEN_THINKING_ACK_ENABLE", False)
-    thinking_ack_text: str = _env_compat("SURF_LLM_THINKING_ACK_TEXT", "SURF_QWEN_THINKING_ACK_TEXT", "小浦思考中")
+    thinking_ack_enable: bool = _env_bool_compat("SURF_LLM_THINKING_ACK_ENABLE", "SURF_QWEN_THINKING_ACK_ENABLE", True)
+    # Retained for compatibility with older local.env files. New code chooses from
+    # the language-specific phrase lists below and serves their WAVs from cache.
+    thinking_ack_text: str = _env_compat("SURF_LLM_THINKING_ACK_TEXT", "SURF_QWEN_THINKING_ACK_TEXT", "让我查一下。")
+    thinking_ack_texts_zh: tuple[str, ...] = field(
+        default_factory=lambda: _env_list(
+            "LLM_THINKING_ACK_TEXTS_ZH",
+            ("让我查一下。", "我来看看。", "让我想一想。"),
+        )
+    )
+    thinking_ack_texts_en: tuple[str, ...] = field(
+        default_factory=lambda: _env_list(
+            "LLM_THINKING_ACK_TEXTS_EN",
+            ("Let me check.", "Let me think.", "One moment."),
+        )
+    )
+    thinking_ack_cache_version: str = _env("LLM_THINKING_ACK_CACHE_VERSION", "v1")
     thinking_ack_skip_action_intent: bool = _env_bool("LLM_THINKING_ACK_SKIP_ACTION_INTENT", True)
-    thinking_ack_play_gap_sec: float = _env_float("LLM_THINKING_ACK_PLAY_GAP_SEC", 0.6)
+    thinking_ack_play_gap_sec: float = _env_float("LLM_THINKING_ACK_PLAY_GAP_SEC", 0.0)
     thinking_action_enable: bool = _env_bool_compat("SURF_LLM_THINKING_ACTION_ENABLE", "SURF_QWEN_THINKING_ACTION_ENABLE", False)
     thinking_action_id: int = _env_int("LLM_THINKING_ACTION_ID", 25)
     thinking_action_release_after_sec: float = _env_float("LLM_THINKING_ACTION_RELEASE_AFTER_SEC", 0.0)
