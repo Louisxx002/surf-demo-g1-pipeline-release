@@ -16,6 +16,9 @@ const readinessList = document.querySelector("#readinessList");
 const turnModeCurrent = document.querySelector("#turnModeCurrent");
 const turnModeBasic = document.querySelector("#turnModeBasic");
 const turnModeSmart = document.querySelector("#turnModeSmart");
+const firstTurnModeCurrent = document.querySelector("#firstTurnModeCurrent");
+const firstTurnModeStandard = document.querySelector("#firstTurnModeStandard");
+const firstTurnModeCompatible = document.querySelector("#firstTurnModeCompatible");
 
 const maxEvents = 240;
 const turnItems = new Map();
@@ -26,6 +29,8 @@ let currentPipelineState = "unknown";
 let currentLogPath = "";
 let currentTurnMode = "basic";
 let turnModeBusy = false;
+let currentFirstTurnMode = "standard";
+let firstTurnModeBusy = false;
 
 function formatTime(value) {
   if (!value) return "--:--:--";
@@ -222,6 +227,7 @@ function setPipelineBusy(isBusy) {
   interruptPipelineButton.disabled = isBusy || currentPipelineState !== "running";
   endSessionButton.disabled = isBusy || currentPipelineState !== "running";
   updateTurnModeControls();
+  updateFirstTurnModeControls();
 }
 
 function updateTurnModeControls() {
@@ -236,6 +242,18 @@ function updateTurnModeControls() {
   turnModeSmart.disabled = !canSwitch || !isBasic;
 }
 
+function updateFirstTurnModeControls() {
+  const canSwitch = currentPipelineState === "stopped" && !pipelineBusy && !firstTurnModeBusy;
+  const isStandard = currentFirstTurnMode === "standard";
+  firstTurnModeCurrent.textContent = `首轮：${isStandard ? "标准" : "兼容"}`;
+  firstTurnModeStandard.classList.toggle("active", isStandard);
+  firstTurnModeCompatible.classList.toggle("active", !isStandard);
+  firstTurnModeStandard.setAttribute("aria-pressed", String(isStandard));
+  firstTurnModeCompatible.setAttribute("aria-pressed", String(!isStandard));
+  firstTurnModeStandard.disabled = !canSwitch || isStandard;
+  firstTurnModeCompatible.disabled = !canSwitch || !isStandard;
+}
+
 function updatePipelineStatus(payload) {
   const state = payload?.state || "unknown";
   currentPipelineState = state;
@@ -246,6 +264,7 @@ function updatePipelineStatus(payload) {
   if (pipelineBusy) interruptPipelineButton.disabled = true;
   if (pipelineBusy) endSessionButton.disabled = true;
   updateTurnModeControls();
+  updateFirstTurnModeControls();
   renderReadiness(payload || {});
 }
 
@@ -375,6 +394,53 @@ async function setTurnMode(mode) {
   } finally {
     turnModeBusy = false;
     updateTurnModeControls();
+  }
+}
+
+async function refreshFirstTurnMode() {
+  try {
+    const response = await fetch("/api/first-turn-mode");
+    const payload = await response.json();
+    if (payload.ok && (payload.mode === "standard" || payload.mode === "compatible")) {
+      currentFirstTurnMode = payload.mode;
+    }
+  } catch (error) {
+    addEvent({ kind: "system", title: "ERROR", message: `读取首轮模式失败：${String(error)}` });
+  } finally {
+    updateFirstTurnModeControls();
+  }
+}
+
+async function setFirstTurnMode(mode) {
+  if (
+    firstTurnModeBusy ||
+    currentPipelineState !== "stopped" ||
+    mode === currentFirstTurnMode
+  ) return;
+  firstTurnModeBusy = true;
+  updateFirstTurnModeControls();
+  try {
+    const response = await fetch("/api/first-turn-mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    currentFirstTurnMode = payload.mode;
+    addEvent({
+      kind: "state",
+      title: "FIRST_TURN_MODE",
+      message: `首轮已切换为${currentFirstTurnMode === "standard" ? "标准" : "兼容"}模式`,
+    });
+  } catch (error) {
+    addEvent({ kind: "system", title: "ERROR", message: `切换首轮模式失败：${String(error)}` });
+    await refreshFirstTurnMode();
+  } finally {
+    firstTurnModeBusy = false;
+    updateFirstTurnModeControls();
   }
 }
 
@@ -560,14 +626,18 @@ interruptPipelineButton.addEventListener("click", runPipelineInterrupt);
 endSessionButton.addEventListener("click", runPipelineEndSession);
 turnModeBasic.addEventListener("click", () => setTurnMode("basic"));
 turnModeSmart.addEventListener("click", () => setTurnMode("smart"));
+firstTurnModeStandard.addEventListener("click", () => setFirstTurnMode("standard"));
+firstTurnModeCompatible.addEventListener("click", () => setFirstTurnMode("compatible"));
 
 loadSnapshot()
   .catch((error) => addEvent({ kind: "system", title: "ERROR", message: String(error) }))
   .finally(() => {
     refreshPipelineStatus();
     refreshTurnMode();
+    refreshFirstTurnMode();
     connectEvents();
     setInterval(refreshTurns, 2500);
     setInterval(refreshPipelineStatus, 5000);
     setInterval(refreshTurnMode, 5000);
+    setInterval(refreshFirstTurnMode, 5000);
   });

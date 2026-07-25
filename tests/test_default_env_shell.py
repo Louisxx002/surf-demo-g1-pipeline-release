@@ -1,3 +1,4 @@
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -25,6 +26,15 @@ class DefaultEnvShellTests(unittest.TestCase):
         for phrase in ("再见", "拜拜", "我没有问题了", "你退下吧", "bye", "nothing else"):
             self.assertIn(phrase, env)
         self.assertIn("小浦退下了", env)
+
+    def test_first_turn_mode_is_forwarded_to_llm_service_environment(self):
+        script = (ROOT / "scripts" / "run_pipeline.sh").read_text(encoding="utf-8")
+        match = re.search(r"^SYSTEMD_ENV=\(\n(?P<body>.*?)^\)", script, re.MULTILINE | re.DOTALL)
+
+        self.assertIsNotNone(match)
+        systemd_env = match.group("body")
+        self.assertIn("--setenv=LLM_FIRST_TURN_MODE=", systemd_env)
+        self.assertIn("--setenv=LLM_FIRST_TURN_COMPAT_LISTEN_SEC=", systemd_env)
 
 
 if __name__ == "__main__":

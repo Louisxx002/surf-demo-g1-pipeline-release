@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 
 from pipeline_log.latency_tracker import read_turn_summaries
 from pipeline_control.interrupt import InterruptControl
+from first_turn.mode_control import FirstTurnModeStore, normalize_first_turn_mode
 from turn_detection.mode_control import TurnModeStore, normalize_mode
 
 
@@ -52,6 +53,7 @@ PIPELINE_ENV_DEFAULTS = {
     "LLM_THINKING_ACK_PLAY_GAP_SEC": "0",
     "LLM_REQUEST_TIMEOUT_SEC": "20",
     "SURF_LLM_WAKE_LISTEN_SEC": "15",
+    "LLM_FIRST_TURN_COMPAT_LISTEN_SEC": "20",
     "LLM_FOLLOWUP_TIMEOUT_SEC": "15",
     "LLM_STANDBY_ACK_ENABLE": "0",
 }
@@ -62,6 +64,7 @@ ROBOT_MIC_RUNTIME_ROOT = "/home/unitree/surf_robot_mic"
 ROBOT_MIC_SCRIPT = f"{ROBOT_MIC_RUNTIME_ROOT}/tools/stream_usb_mic.py"
 ROBOT_MIC_FILTER = f"{ROBOT_MIC_RUNTIME_ROOT}/filters/DCF_Targ7_runtime.npz"
 TURN_MODE_FILENAME = "turn_mode.json"
+FIRST_TURN_MODE_FILENAME = "first_turn_mode.json"
 
 
 def turn_mode_status(runtime_dir: Path | None = None) -> dict[str, Any]:
@@ -92,6 +95,37 @@ def update_turn_mode(
 
     root = runtime_dir or (PROJECT_ROOT / "runtime")
     TurnModeStore(root / TURN_MODE_FILENAME).write(normalized)
+    return {"ok": True, "mode": normalized, "pipeline_state": state}
+
+
+def first_turn_mode_status(runtime_dir: Path | None = None) -> dict[str, Any]:
+    root = runtime_dir or (PROJECT_ROOT / "runtime")
+    mode = FirstTurnModeStore(root / FIRST_TURN_MODE_FILENAME).read()
+    return {
+        "ok": True,
+        "mode": mode,
+        "label": "标准" if mode == "standard" else "兼容",
+    }
+
+
+def update_first_turn_mode(
+    mode: str,
+    *,
+    runtime_dir: Path | None = None,
+    pipeline_state_getter: Any | None = None,
+) -> dict[str, Any]:
+    try:
+        normalized = normalize_first_turn_mode(mode)
+    except ValueError as exc:
+        return {"ok": False, "error": "invalid_mode", "detail": str(exc)}
+
+    state_getter = pipeline_state_getter or (lambda: pipeline_status()["state"])
+    state = str(state_getter())
+    if state != "stopped":
+        return {"ok": False, "error": "session_active", "pipeline_state": state}
+
+    root = runtime_dir or (PROJECT_ROOT / "runtime")
+    FirstTurnModeStore(root / FIRST_TURN_MODE_FILENAME).write(normalized)
     return {"ok": True, "mode": normalized, "pipeline_state": state}
 
 
@@ -716,12 +750,17 @@ def run_pipeline_command(
     command_runner: Any = subprocess.run,
     robot_runtime_starter: Any = ensure_robot_runtime,
     services_ready_checker: Any | None = None,
+    first_turn_runtime_dir: Path | None = None,
 ) -> dict[str, Any]:
     if action not in {"start", "stop"}:
         raise ValueError(f"Unsupported pipeline action: {action}")
 
     env = os.environ.copy()
     env.update(PIPELINE_ENV_DEFAULTS)
+    runtime_root = first_turn_runtime_dir or (PROJECT_ROOT / "runtime")
+    env["LLM_FIRST_TURN_MODE"] = FirstTurnModeStore(
+        runtime_root / FIRST_TURN_MODE_FILENAME
+    ).read()
     if action == "start":
         robot_runtime = robot_runtime_starter()
         if not robot_runtime.get("ok"):
@@ -998,6 +1037,8 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                 self._serve_pipeline_status()
             elif parsed.path == "/api/turn-mode":
                 _json_response(self, turn_mode_status())
+            elif parsed.path == "/api/first-turn-mode":
+                _json_response(self, first_turn_mode_status())
             elif parsed.path == "/events":
                 self._serve_sse()
             else:
@@ -1015,6 +1056,8 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                 self._run_pipeline_end_session()
             elif parsed.path == "/api/turn-mode":
                 self._update_turn_mode()
+            elif parsed.path == "/api/first-turn-mode":
+                self._update_first_turn_mode()
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -1108,6 +1151,25 @@ def make_handler(logs_dir: Path) -> type[BaseHTTPRequestHandler]:
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 result = update_turn_mode(str(payload.get("mode", "")))
+                if result.get("ok"):
+                    status = HTTPStatus.OK
+                elif result.get("error") == "session_active":
+                    status = HTTPStatus.CONFLICT
+                else:
+                    status = HTTPStatus.BAD_REQUEST
+                _json_response(self, result, status)
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                _json_response(
+                    self,
+                    {"ok": False, "error": "invalid_request", "detail": str(exc)},
+                    HTTPStatus.BAD_REQUEST,
+                )
+
+        def _update_first_turn_mode(self) -> None:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                result = update_first_turn_mode(str(payload.get("mode", "")))
                 if result.get("ok"):
                     status = HTTPStatus.OK
                 elif result.get("error") == "session_active":

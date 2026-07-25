@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>G1 Pipeline Monitor</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260722-endpoint-mode" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260725-first-turn-mode" />
   </head>
   <body>
     <main class="app">
@@ -20,6 +20,11 @@
             <span id="turnModeCurrent" class="turn-mode-current">模式：快速转写</span>
             <button id="turnModeBasic" class="turn-mode-option" type="button" aria-pressed="true">快速</button>
             <button id="turnModeSmart" class="turn-mode-option" type="button" aria-pressed="false">停顿</button>
+          </div>
+          <div class="turn-mode-control" role="group" aria-label="首轮应答模式">
+            <span id="firstTurnModeCurrent" class="turn-mode-current">首轮：标准</span>
+            <button id="firstTurnModeStandard" class="turn-mode-option" type="button" aria-pressed="true">标准</button>
+            <button id="firstTurnModeCompatible" class="turn-mode-option" type="button" aria-pressed="false">兼容</button>
           </div>
           <button id="startPipelineButton" type="button">启动 Pipeline</button>
           <button id="stopPipelineButton" type="button">停止 Pipeline</button>
@@ -75,6 +80,6 @@
       </div>
     </main>
 
-    <script src="/static/app.js?v=20260722-endpoint-mode"></script>
+    <script src="/static/app.js?v=20260725-first-turn-mode"></script>
   </body>
 </html>

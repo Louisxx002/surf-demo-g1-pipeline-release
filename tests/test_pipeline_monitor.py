@@ -18,6 +18,7 @@ from pipeline_monitor.server import (
     detect_robot_mic_device,
     event_view,
     ensure_robot_runtime,
+    first_turn_mode_status,
     find_latest_pipeline_log,
     make_handler,
     pipeline_status,
@@ -28,12 +29,34 @@ from pipeline_monitor.server import (
     run_pipeline_end_session,
     run_pipeline_interrupt,
     turn_mode_status,
+    update_first_turn_mode,
     update_turn_mode,
 )
 from http.server import ThreadingHTTPServer
 
 
 class PipelineMonitorTests(unittest.TestCase):
+    def test_first_turn_mode_store_allows_switch_only_when_pipeline_is_stopped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            result = update_first_turn_mode(
+                "compatible",
+                runtime_dir=runtime_dir,
+                pipeline_state_getter=lambda: "stopped",
+            )
+            self.assertTrue(result["ok"])
+            status = first_turn_mode_status(runtime_dir=runtime_dir)
+            self.assertEqual(status["mode"], "compatible")
+            self.assertEqual(status["label"], "兼容")
+
+            blocked = update_first_turn_mode(
+                "standard",
+                runtime_dir=runtime_dir,
+                pipeline_state_getter=lambda: "running",
+            )
+            self.assertFalse(blocked["ok"])
+            self.assertEqual(blocked["error"], "session_active")
+
     def test_turn_mode_store_allows_switch_only_when_pipeline_is_stopped(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime_dir = Path(tmp)
@@ -384,6 +407,32 @@ class PipelineMonitorTests(unittest.TestCase):
         self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_SOURCE_CHANNELS"], "8")
         self.assertEqual(PIPELINE_ENV_DEFAULTS["ROBOT_MIC_CHANNEL_MAP"], "0,1,2,3")
         self.assertGreaterEqual(calls[0][1]["timeout"], 360)
+
+    def test_run_pipeline_command_uses_persisted_first_turn_mode(self):
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append((command, kwargs))
+            return type("Result", (), {"returncode": 0, "stdout": "started", "stderr": ""})()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            update_first_turn_mode(
+                "compatible",
+                runtime_dir=runtime_dir,
+                pipeline_state_getter=lambda: "stopped",
+            )
+            result = run_pipeline_command(
+                "start",
+                command_runner=fake_runner,
+                robot_runtime_starter=lambda: {"ok": True, "relay_ready": True, "mic_ready": True},
+                services_ready_checker=lambda: True,
+                first_turn_runtime_dir=runtime_dir,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls[0][1]["env"]["LLM_FIRST_TURN_MODE"], "compatible")
+        self.assertEqual(calls[0][1]["env"]["LLM_FIRST_TURN_COMPAT_LISTEN_SEC"], "20")
 
     def test_run_pipeline_command_reports_start_timeout(self):
         def fake_runner(command, **kwargs):
@@ -818,6 +867,20 @@ card 2: APE [NVIDIA Jetson Orin NX APE], device 0: tegra-dlink-0 []
         self.assertNotIn(">智能<", html)
         self.assertIn('fetch("/api/turn-mode")', javascript)
         self.assertIn('fetch("/api/turn-mode",', javascript)
+
+    def test_monitor_ui_exposes_independent_first_turn_mode_toggle(self):
+        project_root = Path(__file__).resolve().parents[1]
+        html = (project_root / "ui/pipeline_monitor/index.html").read_text(encoding="utf-8")
+        javascript = (project_root / "ui/pipeline_monitor/app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="firstTurnModeCurrent"', html)
+        self.assertIn('id="firstTurnModeStandard"', html)
+        self.assertIn('id="firstTurnModeCompatible"', html)
+        self.assertIn("首轮：标准", html)
+        self.assertIn(">标准<", html)
+        self.assertIn(">兼容<", html)
+        self.assertIn('fetch("/api/first-turn-mode")', javascript)
+        self.assertIn('fetch("/api/first-turn-mode",', javascript)
 
 
 if __name__ == "__main__":

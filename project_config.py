@@ -73,6 +73,13 @@ def _env_list_compat(name: str, legacy_name: str, default: tuple[str, ...]) -> t
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
+def _first_turn_wake_listen_sec() -> float:
+    mode = _env("LLM_FIRST_TURN_MODE", "standard").strip().lower()
+    if mode == "compatible":
+        return _env_float("LLM_FIRST_TURN_COMPAT_LISTEN_SEC", 20.0)
+    return _env_float_compat("SURF_LLM_WAKE_LISTEN_SEC", "SURF_QWEN_WAKE_LISTEN_SEC", 8.0)
+
+
 @dataclass(frozen=True)
 class ProjectConfig:
     project_root: Path = PROJECT_ROOT
@@ -139,7 +146,8 @@ class ProjectConfig:
     thinking_action_enable: bool = _env_bool_compat("SURF_LLM_THINKING_ACTION_ENABLE", "SURF_QWEN_THINKING_ACTION_ENABLE", False)
     thinking_action_id: int = _env_int("LLM_THINKING_ACTION_ID", 25)
     thinking_action_release_after_sec: float = _env_float("LLM_THINKING_ACTION_RELEASE_AFTER_SEC", 0.0)
-    wake_listen_sec: float = _env_float_compat("SURF_LLM_WAKE_LISTEN_SEC", "SURF_QWEN_WAKE_LISTEN_SEC", 8.0)
+    first_turn_mode: str = _env("LLM_FIRST_TURN_MODE", "standard")
+    wake_listen_sec: float = _first_turn_wake_listen_sec()
     followup_enable: bool = _env_bool("LLM_FOLLOWUP_ENABLE", True)
     followup_timeout_sec: float = _env_float("LLM_FOLLOWUP_TIMEOUT_SEC", 8.0)
     followup_prompt_enable: bool = _env_bool("LLM_FOLLOWUP_PROMPT_ENABLE", True)

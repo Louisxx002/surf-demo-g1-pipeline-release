@@ -37,6 +37,33 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class SelfSpeechGuardPolicyTests(unittest.TestCase):
     @staticmethod
+    def _first_turn_guard_reason(asr_text):
+        class FakeNode:
+            _normalize_asr_text = context_module.LlmSurfContextNode._normalize_asr_text
+
+            def _wake_listen_waiting(self):
+                return True
+
+            def _read_tts_guard(self):
+                return {
+                    "active": True,
+                    "kind": "wake_ack",
+                    "text": "我在",
+                    "updated_at": 1.0,
+                    "guard_until": 9999999999.0,
+                }
+
+        config = SimpleNamespace(
+            wake_ack_guard_sec=0.8,
+            wake_words=("你好小浦",),
+        )
+        with patch.object(context_module, "CONFIG", config):
+            return context_module.LlmSurfContextNode._first_turn_wake_ack_guard_reason(
+                FakeNode(),
+                asr_text,
+            )
+
+    @staticmethod
     def _match_asr(tts_text, asr_text):
         class FakeNode:
             _normalize_asr_text = context_module.LlmSurfContextNode._normalize_asr_text
@@ -88,6 +115,13 @@ class SelfSpeechGuardPolicyTests(unittest.TestCase):
         matched, _ = self._match_asr("我在", "我在")
 
         self.assertTrue(matched)
+
+    def test_first_turn_guard_rejects_exact_wake_ack(self):
+        self.assertEqual(self._first_turn_guard_reason("我在"), "filler")
+
+    def test_first_turn_guard_preserves_sentence_containing_wake_ack(self):
+        self.assertEqual(self._first_turn_guard_reason("我在工作"), "")
+        self.assertEqual(self._first_turn_guard_reason("我在，请介绍学校"), "")
 
     def test_exact_followup_prompt_is_still_rejected(self):
         matched, _ = self._match_asr("还有什么想问的吗", "还有什么想问的吗")
